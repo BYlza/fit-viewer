@@ -142,9 +142,11 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
     if in_near:
         visits.append((v_start, len(points) - 1, v_min_d, v_min_i))
 
-    # 每次经过起点 = 一圈
+    # 每次经过起点 = 一圈。跳过起始位置（活动开始时就在起点附近）
     lap_ends = []
     for vs, ve, md, mi in visits:
+        if vs == 0:
+            continue  # 跳过起点处的第一次经过
         lap_ends.append(mi)
 
     if len(lap_ends) < 2: return False, []
