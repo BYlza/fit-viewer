@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# 生成文件
+fit_route.html
+
+# FIT 数据文件（可选：如需跟踪数据则取消注释）
+# *.fit
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
