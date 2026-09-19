@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 FIT 运动轨迹双端查看器
-- 闭环GPS自动识别圈数（最后一圈不闭合也保留）
+- 闭环GPS自动识别圈数，每圈末点=离起点最近的点
 - 选圈时该圈所有记录点均可点击查看运动信息
+- 底部固定全局统计栏，不受选圈/选点影响
 - 启动时文件选择对话框，可同时加载多个fit文件并切换
-- 生成独立HTML（数据内嵌），桌面/移动浏览器直接打开
 用法: python fit_viewer.py [fit文件路径] [输出文件名]
 """
 import sys, os, json, math, webbrowser, subprocess
@@ -80,60 +80,62 @@ def parse_fit(path):
     for p in points: del p["ts"]
     return points, summary, lap_data, has_laps
 
-def detect_loops(points, min_away=8, min_lap_pts=50, min_lap_dist=80):
-    """闭环检测。
-    完整圈：GPS回归起点。最后一圈不闭合也保留（标记为 incomplete）。
-    """
-    if len(points) < 20: return False, []
+def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
+    """闭环检测。每圈末点 = 离该圈起点最近的点。"""
+    if len(points) < 30: return False, []
     rlat, rlon = points[0]["lat"], points[0]["lon"]
-    dists = [haversine(rlat, rlon, p["lat"], p["lon"]) for p in points]
-    max_d = max(dists)
+    all_dists = [haversine(rlat, rlon, p["lat"], p["lon"]) for p in points]
+    max_d = max(all_dists)
     if max_d < 30: return False, []
 
-    near_thr = max_d * 0.30
-    far_thr  = max_d * 0.55
+    far_thr = max_d * 0.50
 
-    # 检测回归事件
     lap_ends = []
-    away_cnt, gap, away_seen = 0, 0, False
-    last_end = -min_lap_pts
-    for idx, p in enumerate(points):
-        d = dists[idx]
-        if away_seen: gap += 1
-        if d > far_thr:
-            away_cnt += 1
-            if away_cnt >= min_away: away_seen = True
-        if away_seen and d < near_thr and gap >= 2 and (idx - last_end) >= min_lap_pts:
-            lap_d = sum(
-                haversine(points[j-1]["lat"], points[j-1]["lon"],
-                          points[j]["lat"], points[j]["lon"])
-                for j in range(max(last_end + 1, 0), idx + 1)
-            ) if last_end >= 0 else max_d * 2
-            if lap_d >= min_lap_dist or last_end < 0:
-                lap_ends.append(idx)
-                last_end = idx
-            away_seen = False; away_cnt = 0; gap = 0
+    away_cnt = 0
+    away_seen = False
+    prev_start = 0
+    min_dist = 1e9
+    min_idx = 0
 
-    # 构建 lap 数据
+    for idx in range(len(points)):
+        # 用当前圈起点计算距离
+        lsp = points[prev_start]
+        d = haversine(lsp["lat"], lsp["lon"], points[idx]["lat"], points[idx]["lon"])
+
+        if not away_seen:
+            if d > far_thr:
+                away_cnt += 1
+                if away_cnt >= min_away:
+                    away_seen = True
+                    min_dist = 1e9
+                    min_idx = idx
+        else:
+            if d < min_dist:
+                min_dist = d
+                min_idx = idx
+            if d > far_thr and (idx - prev_start) >= min_lap_pts:
+                lap_d = sum(
+                    haversine(points[j-1]["lat"], points[j-1]["lon"],
+                              points[j]["lat"], points[j]["lon"])
+                    for j in range(prev_start + 1, min_idx + 1)
+                ) if min_idx > prev_start else 0
+                if lap_d >= min_lap_dist or prev_start == 0:
+                    lap_ends.append(min_idx)
+                    prev_start = min_idx
+                away_seen = False
+                away_cnt = 0
+
+    if len(lap_ends) < 2: return False, []
     laps = []
     prev = 0
-    snap_lat, snap_lon = points[0]["lat"], points[0]["lon"]
-
-    if lap_ends:
-        for lap_idx, end in enumerate(lap_ends):
-            lap, snap_lat, snap_lon = _make_lap(
-                points, lap_idx, prev, end, closed=True,
-                snap_lat=snap_lat, snap_lon=snap_lon)
-            laps.append(lap)
-            prev = end + 1
-        if prev < len(points):
-            lap, _, _ = _make_lap(points, len(lap_ends), prev, len(points)-1, closed=False)
-            laps.append(lap)
-    else:
-        return False, []
+    for lap_idx, end in enumerate(lap_ends):
+        laps.append(_make_lap(points, lap_idx, prev, end, closed=True))
+        prev = end
+    if prev < len(points) - 5:
+        laps.append(_make_lap(points, len(lap_ends), prev, len(points)-1, closed=False))
     return True, laps
 
-def _make_lap(points, idx, si, ei, closed, snap_lat=None, snap_lon=None):
+def _make_lap(points, idx, si, ei, closed):
     lp = points[si:ei+1]
     ld = sum(haversine(lp[j-1]["lat"],lp[j-1]["lon"],lp[j]["lat"],lp[j]["lon"])
              for j in range(1, len(lp)))
@@ -142,35 +144,17 @@ def _make_lap(points, idx, si, ei, closed, snap_lat=None, snap_lon=None):
     hrs = [p["hr"] for p in lp if p.get("hr")]
     ahr = int(sum(hrs)/len(hrs)) if hrs else None
     asp = round(ld / el, 2) if el > 0 else None
-
     out_pts = []
     for p in lp:
         cp = dict(p)
         cp.pop("ts", None)
         out_pts.append(cp)
-    if closed:
-        # 起点吸附到上一圈的终点，保持圈间连续
-        if snap_lat is not None and out_pts:
-            out_pts[0]["lat"] = round(snap_lat, 6)
-            out_pts[0]["lon"] = round(snap_lon, 6)
-        # 末点吸附到该圈的起点，形成闭合
-        first_lat = out_pts[0]["lat"]
-        first_lon = out_pts[0]["lon"]
-        if out_pts:
-            out_pts[-1]["lat"] = first_lat
-            out_pts[-1]["lon"] = first_lon
-        new_snap_lat = first_lat
-        new_snap_lon = first_lon
-    else:
-        new_snap_lat = snap_lat
-        new_snap_lon = snap_lon
-
     return {
         "i": idx + 1, "si": si, "ei": ei,
         "d": round(ld, 1), "t": round(el),
         "hr": ahr, "spd": asp, "pace": speed_to_pace(asp),
         "n": len(lp), "closed": closed, "pts": out_pts,
-    }, new_snap_lat, new_snap_lon
+    }
 
 # ─── HTML 模板 ─────────────────────────────────
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -186,7 +170,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 #map{position:fixed;inset:0;z-index:0}
 
 /* 左侧面板 */
-.side{position:fixed;top:0;left:0;bottom:0;z-index:100;width:230px;
+.side{position:fixed;top:0;left:0;bottom:56px;z-index:100;width:230px;
   background:rgba(15,15,30,.95);backdrop-filter:blur(10px);
   display:flex;flex-direction:column;transition:transform .3s ease;
   border-right:1px solid rgba(255,255,255,.08)}
@@ -231,13 +215,13 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
   box-shadow:0 2px 8px rgba(0,0,0,.3);max-width:200px}
 .file-box select option{background:#1a1a2e;color:#eee}
 
-/* 右侧信息面板 */
+/* 右侧信息面板（点击单点时显示） */
 .info{position:fixed;top:50px;right:10px;z-index:100;
   background:rgba(15,15,30,.92);backdrop-filter:blur(10px);
   border-radius:12px;padding:14px 16px;
   box-shadow:0 4px 20px rgba(0,0,0,.4);
   width:280px;font-size:13px;line-height:1.6;color:#ddd;
-  max-height:calc(100vh - 70px);overflow-y:auto;
+  max-height:calc(100vh - 120px);overflow-y:auto;
   border:1px solid rgba(255,255,255,.08)}
 .info h3{font-size:14px;margin-bottom:8px;color:#fff;font-weight:600}
 .info .r{display:flex;justify-content:space-between;padding:2px 0}
@@ -245,13 +229,26 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 .info .sp{border-top:1px solid rgba(255,255,255,.08);margin:8px 0}
 .info .hint{text-align:center;color:#666;font-size:11px;margin-top:4px}
 
+/* 底部固定统计栏 */
+.stat-bar{position:fixed;bottom:0;left:0;right:0;z-index:150;height:56px;
+  background:rgba(15,15,30,.95);backdrop-filter:blur(10px);
+  border-top:1px solid rgba(255,255,255,.08);
+  display:flex;align-items:center;justify-content:space-around;
+  padding:0 16px;font-size:12px;color:#ccc}
+.stat-bar .item{text-align:center;line-height:1.3}
+.stat-bar .val{font-size:16px;font-weight:700;color:#fff}
+.stat-bar .lbl{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px}
+.stat-bar .sep{width:1px;height:28px;background:rgba(255,255,255,.1)}
+
 /* 移动端适配 */
 @media(max-width:600px){
-  .side{width:200px}
-  .side.off{transform:translateX(-200px)}
-  .info{width:calc(100vw - 20px);right:10px;left:10px;top:auto;bottom:10px;
-    max-height:45vh;font-size:12px}
-  .file-box select{max-width:140px}
+  .side{width:190px}
+  .side.off{transform:translateX(-190px)}
+  .info{width:calc(100vw - 20px);right:10px;left:10px;top:auto;bottom:66px;
+    max-height:40vh;font-size:12px}
+  .stat-bar{height:50px;padding:0 8px}
+  .stat-bar .val{font-size:14px}
+  .file-box select{max-width:130px}
 }
 </style>
 </head>
@@ -267,27 +264,24 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 <!-- 顶部工具栏 -->
 <div class="toolbar">
   <button class="tb" id="bL" onclick="tSb()" style="display:none">圈数</button>
-  <button class="tb" id="bS" onclick="tP()">概要</button>
   <button class="tb" id="bC" onclick="cMod()">心率</button>
 </div>
 
 <!-- 文件选择 -->
 <div class="file-box"><select id="fSel" onchange="swFile(+this.value)"></select></div>
 
-<!-- 信息面板 -->
+<!-- 点击信息面板 -->
 <div class="info" id="pnl" style="display:none"></div>
+
+<!-- 底部固定统计栏 -->
+<div class="stat-bar" id="statBar"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-// ===== 数据 =====
-var ALL = @DATA@;
-var FNAMES = @FILENAMES@;
+var ALL=@DATA@, FNAMES=@FILENAMES@;
+var ci=0,P,S,LP,LPP,CLR,HAS;
+var mp=null,cm='hr',al=-1,segs=[],cts=[];
 
-var ci=0, P, S, LP, LPP, CLR, HAS;
-var mp=null, cm='hr', al=-1;
-var segs=[], cts=[];
-
-// ===== 地图 =====
 function initMap(){
   if(mp){mp.remove();mp=null}
   mp=L.map('map',{zoomControl:true,tap:true,preferCanvas:true});
@@ -297,12 +291,12 @@ function initMap(){
 }
 
 function loadFile(i){
-  ci=i; var d=ALL[i];
-  P=d.pts; S=d.sm; LP=d.laps; LPP=d.lap_pts; CLR=d.clr; HAS=d.has;
+  ci=i;var d=ALL[i];
+  P=d.pts;S=d.sm;LP=d.laps;LPP=d.lap_pts;CLR=d.clr;HAS=d.has;
   al=-1;
   document.getElementById('pnl').style.display='none';
   if(!mp)initMap();
-  buildSb(); draw(); addCts();
+  buildSb();draw();addCts();buildStat();
   document.getElementById('fSel').value=i;
 }
 
@@ -316,7 +310,6 @@ function pc(p){return cm==='spd'?sc(p.spd):cm==='alt'?ac(p.alt):hc(p.hr)}
 // ===== 绘制轨迹 =====
 function draw(){
   segs.forEach(function(s){mp.removeLayer(s)});segs=[];
-  // 选圈时用该圈独立点数据（末点已吸附起点），全部时用全局点
   var v=al>=0?LPP[al]:P;
   if(!v||!v.length)return;
   for(var i=0;i<v.length-1;i++){
@@ -324,15 +317,11 @@ function draw(){
     segs.push(L.polyline([[v[i].lat,v[i].lon],[v[i+1].lat,v[i+1].lon]],
       {color:c,weight:4,opacity:.85}).addTo(mp));
   }
-  mp.fitBounds(L.latLngBounds(v.map(function(p){return[p.lat,p.lon]})),{padding:[50,50]});
-  // 起点
+  mp.fitBounds(L.latLngBounds(v.map(function(p){return[p.lat,p.lon]})),{padding:[50,60]});
   segs.push(L.circleMarker([v[0].lat,v[0].lon],
     {radius:7,fillColor:'#00e676',fillOpacity:1,weight:2,color:'#fff'})
     .addTo(mp).bindTooltip('起点',{direction:'top',offset:[0,-8]}));
-  // 终点（闭合圈时终点≈起点，不闭合圈时显示为独立标记）
-  if(!HAS||al<0||LP[al].closed){
-    // 闭合圈：终点和起点重合，只显示起点标记
-  } else {
+  if(HAS&&al>=0&&!LP[al].closed){
     segs.push(L.circleMarker([v[v.length-1].lat,v[v.length-1].lon],
       {radius:7,fillColor:'#ff1744',fillOpacity:1,weight:2,color:'#fff'})
       .addTo(mp).bindTooltip('终点（未闭合）',{direction:'top',offset:[0,-8]}));
@@ -342,47 +331,28 @@ function draw(){
 // ===== 可点击层 =====
 function addCts(){
   cts.forEach(function(m){mp.removeLayer(m)});cts=[];
-  // 选圈时用该圈独立点数据
-  var v, ref;
-  if(al>=0){
-    v=LPP[al]; ref=P;  // ref 用于找回原始索引
-    if(!v)return;
-    v.forEach(function(p){
-      // 在全局 P 中找最近的点索引
-      var best=0,bestD=1e9;
-      for(var k=LP[al].si;k<=LP[al].ei&&k<P.length;k++){
-        var dd=Math.abs(P[k].lat-p.lat)+Math.abs(P[k].lon-p.lon);
-        if(dd<bestD){bestD=dd;best=k}
-      }
-      var m=L.circleMarker([p.lat,p.lon],
-        {radius:8,color:'transparent',fillColor:'transparent',weight:0,fillOpacity:0,interactive:true}
-      ).addTo(mp);
-      m.on('click',function(e){L.DomEvent.stopPropagation(e);showP(p,best)});
-      m.on('touchstart',function(){showP(p,best)});
-      cts.push(m);
-    });
-  } else {
-    v=P;
-    v.forEach(function(p,i){
-      var m=L.circleMarker([p.lat,p.lon],
-        {radius:8,color:'transparent',fillColor:'transparent',weight:0,fillOpacity:0,interactive:true}
-      ).addTo(mp);
-      m.on('click',function(e){L.DomEvent.stopPropagation(e);showP(p,i)});
-      m.on('touchstart',function(){showP(p,i)});
-      cts.push(m);
-    });
-  }
+  var v;
+  if(al>=0){v=LPP[al];if(!v)return}
+  else{v=P}
+  v.forEach(function(p,i){
+    var m=L.circleMarker([p.lat,p.lon],
+      {radius:8,color:'transparent',fillColor:'transparent',weight:0,fillOpacity:0,interactive:true}
+    ).addTo(mp);
+    m.on('click',function(e){L.DomEvent.stopPropagation(e);showP(p,i)});
+    m.on('touchstart',function(){showP(p,i)});
+    cts.push(m);
+  });
 }
 
-// ===== 信息面板 =====
+// ===== 点击信息面板 =====
 function showP(p,idx){
   var pn=document.getElementById('pnl');
   var pace=p.spd>0?(Math.floor(1000/p.spd)+':'+String(~~(1000/p.spd)%60).padStart(2,'0')):'--:--';
   var ln=0;
   if(HAS)for(var j=0;j<LP.length;j++)if(idx>=LP[j].si&&idx<=LP[j].ei){ln=j+1;break}
-  var lapInfo=ln?(LP[ln-1].closed?'<span style="color:#00e676">闭合圈</span>':'<span style="color:#ff9100">不闭合圈</span>'):'';
+  var lapInfo=ln?(LP[ln-1].closed?'<span style="color:#00e676">闭合</span>':'<span style="color:#ff9100">未闭合</span>'):'';
   pn.innerHTML=
-    '<h3>#'+(idx+1)+(ln?' · 第'+ln+'圈 '+lapInfo:'')+'</h3>'+
+    '<h3>#'+(idx+1)+(ln?' 第'+ln+'圈 '+lapInfo:'')+'</h3>'+
     '<div class="r"><span class="l">时间</span><span class="v">'+(p.time||'--')+'</span></div>'+
     '<div class="sp"></div>'+
     '<div class="r"><span class="l">心率</span><span class="v">'+(p.hr||'--')+' bpm</span></div>'+
@@ -393,6 +363,28 @@ function showP(p,idx){
     '<div class="r"><span class="l">距离</span><span class="v">'+(p.dst/1000).toFixed(2)+' km</span></div>'+
     '<div class="r"><span class="l">踏频</span><span class="v">'+(p.cad||'--')+' spm</span></div>';
   pn.style.display='block';
+}
+
+// ===== 底部统计栏（固定，不受选圈/选点影响）=====
+function buildStat(){
+  var d=(S.dist/1000).toFixed(2);
+  var ap=S.avg_spd>0?(Math.floor(1000/S.avg_spd)+':'+String(~~(1000/S.avg_spd)%60).padStart(2,'0')):'--:--';
+  var t=S.time;
+  var tStr=t>=3600?(~~(t/3600)+':'+String(~~((t%3600)/60)).padStart(2,'0')+':'+String(~~(t%60)).padStart(2,'0'))
+    :(~~(t/60)+':'+String(~~(t%60)).padStart(2,'0'));
+  var lapStr=HAS?(LP.length+'圈'):'--';
+  document.getElementById('statBar').innerHTML=
+    '<div class="item"><div class="val">'+d+'</div><div class="lbl">公里</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val">'+tStr+'</div><div class="lbl">时长</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val">'+ap+'</div><div class="lbl">配速/km</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val">'+(S.avg_hr||'--')+'</div><div class="lbl">平均心率</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val">'+(S.cal||'--')+'</div><div class="lbl">千卡</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val">'+lapStr+'</div><div class="lbl">圈数</div></div>';
 }
 
 // ===== 圈数栏 =====
@@ -428,30 +420,6 @@ function sL(i){
 }
 function tSb(){document.getElementById('sb').classList.toggle('off')}
 
-// ===== 概要 =====
-function tP(){var p=document.getElementById('pnl');if(p.style.display==='none')showSum();else p.style.display='none'}
-function showSum(){
-  var p=document.getElementById('pnl');
-  var d=(S.dist/1000).toFixed(2);
-  var ap=S.avg_spd>0?(Math.floor(1000/S.avg_spd)+':'+String(~~(1000/S.avg_spd)%60).padStart(2,'0')):'--:--';
-  var li=HAS?'<div class="r"><span class="l">圈数</span><span class="v">'+LP.length+' 圈</span></div>':'';
-  p.innerHTML=
-    '<h3>运动概要 · '+S.sport+'</h3>'+
-    '<div class="r"><span class="l">总距离</span><span class="v">'+d+' km</span></div>'+
-    '<div class="r"><span class="l">总时间</span><span class="v">'+
-      (S.time>=3600?~~(S.time/3600)+'时':'')+~~((S.time%3600)/60)+'分'+~~(S.time%60)+'秒</span></div>'+
-    '<div class="r"><span class="l">卡路里</span><span class="v">'+(S.cal||'--')+' kcal</span></div>'+
-    '<div class="sp"></div>'+
-    '<div class="r"><span class="l">平均配速</span><span class="v">'+ap+' /km</span></div>'+
-    '<div class="r"><span class="l">平均心率</span><span class="v">'+(S.avg_hr||'--')+' bpm</span></div>'+
-    '<div class="r"><span class="l">最高心率</span><span class="v">'+(S.max_hr||'--')+' bpm</span></div>'+
-    '<div class="sp"></div>'+
-    '<div class="r"><span class="l">爬升/下降</span><span class="v">'+(S.asc||'--')+'m / '+(S.desc||'--')+'m</span></div>'+
-    li+'<div class="sp"></div>'+
-    '<div class="hint">点击轨迹任意位置查看运动数据</div>';
-  p.style.display='block';
-}
-
 // ===== 颜色模式 =====
 function cMod(){
   cm=['hr','spd','alt'][(['hr','spd','alt'].indexOf(cm)+1)%3];
@@ -464,8 +432,7 @@ function cMod(){
 function swFile(i){loadFile(i)}
 
 // ===== 初始化 =====
-initMap();
-loadFile(0);
+initMap();loadFile(0);
 </script>
 </body>
 </html>"""
@@ -474,15 +441,14 @@ def gen_html(all_file_data, out):
     datasets = []
     names = []
     for fn, pts, sm, laps, has in all_file_data:
-        # 把 lap 内嵌的 pts 取出来放入 lap 数据，同时从 lap 中移除（减小体积）
         clean_laps = []
         for l in laps:
             cl = dict(l)
-            cl.pop("pts", None)  # pts 在 lap 里但不放入全局 laps JSON
+            cl.pop("pts", None)
             clean_laps.append(cl)
         datasets.append({
             "pts": pts, "sm": sm, "laps": clean_laps,
-            "lap_pts": [l.get("pts", []) for l in laps],  # 每圈的轨迹点
+            "lap_pts": [l.get("pts", []) for l in laps],
             "clr": LAP_COLORS[:len(laps)], "has": has
         })
         names.append(fn)
@@ -509,13 +475,11 @@ def pick_files():
 
 def open_browser(path):
     url = "file:///" + path.replace("\\", "/")
-    try:
-        webbrowser.open(url)
+    try: webbrowser.open(url)
     except Exception:
-        # 回退：用 python http server
         dirpath = os.path.dirname(path)
         fname = os.path.basename(path)
-        print(f"Starting local server at http://localhost:8765/{fname}")
+        print(f"Starting server at http://localhost:8765/{fname}")
         subprocess.Popen([sys.executable, "-m", "http.server", "8765", "-d", dirpath])
         webbrowser.open(f"http://localhost:8765/{fname}")
 
@@ -530,7 +494,6 @@ def main():
         else: print("No file selected."); sys.exit(1)
 
     out = os.path.join(os.path.dirname(os.path.abspath(fit_paths[0])), "fit_route.html")
-
     all_data = []
     for fp in fit_paths:
         print(f"Parsing: {fp}")
@@ -541,10 +504,8 @@ def main():
                 print(f"  Points: {len(pts)}, Laps: {len(laps) if has else 0}")
         except Exception as e:
             print(f"  Error: {e}")
-
     if not all_data:
         print("Error: No valid FIT files!"); sys.exit(1)
-
     gen_html(all_data, out)
     print(f"\nGenerated: {out} ({len(all_data)} files)")
     open_browser(out)
