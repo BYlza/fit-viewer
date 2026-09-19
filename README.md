@@ -1,5 +1,7 @@
 # FIT 运动轨迹查看器
 
+> 当前版本：**v1.0.1**
+
 一个解析运动手表 `.fit` 文件（Garmin / Amazfit / Zepp 等）并在网页地图上可视化轨迹的桌面工具。支持自动识别绕圈（圈数）与公里分段，逐点查看配速、心率、海拔、累计距离等。
 
 ## 功能
@@ -24,9 +26,9 @@ python fit_viewer.py xx.fit           # 直接指定单个文件
 
 运行后自动在浏览器或内置窗口打开轨迹地图，并生成 `fit_route.html`（可单独用浏览器打开）。
 
-### Windows EXE
+### Windows EXE（无需安装 Python，推荐）
 
-双击 `dist\FIT查看器.exe`，选择包含 `.fit` 文件的文件夹即可。
+直接到 [Releases](https://github.com/BYlza/fit-viewer/releases) 页面下载最新的 `FIT-Viewer.exe`，双击运行，选择包含 `.fit` 文件的文件夹即可，无需安装任何依赖。
 
 ## 打包为 EXE
 
