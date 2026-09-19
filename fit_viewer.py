@@ -49,13 +49,20 @@ def parse_fit(path):
         elif msg.name == "session": sessions.append(d)
 
     points = []
+    cum = 0.0
+    prev = None
     for r in records:
         lat, lon = r.get("position_lat"), r.get("position_long")
         if lat is None or lon is None: continue
         ts = r.get("timestamp")
+        clat = round(lat * SEMI2DEG, 6)
+        clon = round(lon * SEMI2DEG, 6)
+        if prev is not None:
+            cum += haversine(prev[0], prev[1], clat, clon)
+        prev = (clat, clon)
         points.append({
-            "lat": round(lat * SEMI2DEG, 6),
-            "lon": round(lon * SEMI2DEG, 6),
+            "lat": clat,
+            "lon": clon,
             "time": ts.strftime("%H:%M:%S") if isinstance(ts, datetime) else "",
             "ts": ts,
             "hr": r.get("heart_rate"),
@@ -63,6 +70,7 @@ def parse_fit(path):
             "alt": round(r.get("enhanced_altitude", r.get("altitude", 0)) or 0, 1),
             "cad": r.get("cadence"),
             "dst": round(r.get("distance", 0) or 0, 1),
+            "cum": round(cum, 1),
         })
 
     s = sessions[0] if sessions else {}
@@ -91,72 +99,95 @@ def parse_fit(path):
     for p in points: del p["ts"]
     return points, summary, lap_data, has_laps
 
-def detect_loops(points):
-    """闭环检测：纯GPS模式。
-    找所有经过起点区域的时段，每次经过=一圈。
-    跳过起始位置（活动开始时就在起点附近）。
-    最后一圈检查终点是否真正回到起点。
+def detect_loops(points, min_away=8, min_lap_pts=50, min_lap_dist=80):
+    """闭环检测（v1.0 滞回状态机 + 最近点边界）。
+    完整圈：GPS 回归起点，标记闭合。
+    最后一圈：若终点未回到起点(<20m)则标记未闭合；末尾剩余段也保留为未闭合。
+    用 near/far 双阈值 + 滞回避免 GPS 噪声误检。
     """
-    if len(points) < 30: return False, []
+    if len(points) < 20: return False, []
     rlat, rlon = points[0]["lat"], points[0]["lon"]
-    all_dists = [haversine(rlat, rlon, p["lat"], p["lon"]) for p in points]
-    max_d = max(all_dists)
+    dists = [haversine(rlat, rlon, p["lat"], p["lon"]) for p in points]
+    max_d = max(dists)
     if max_d < 30: return False, []  # 路由太小
 
-    # 阈值：基于路由大小自适应
     near_thr = max_d * 0.30
+    far_thr = max_d * 0.55
 
-    # 找所有"经过起点"的连续区间
-    visits = []
+    def path_len(si, ei):
+        return sum(haversine(points[j-1]["lat"], points[j-1]["lon"],
+                             points[j]["lat"], points[j]["lon"])
+                   for j in range(si + 1, ei + 1))
+
+    # 状态机：先走远(>far_thr 连续 min_away 点)，再回到 near(<near_thr)，
+    # 取回到 near 后离起点最近的点作为圈边界（而非刚进近区的点）。
+    lap_ends = []
+    away_cnt = 0
+    armed = False
     in_near = False
-    v_start = 0
-    v_min_d = 1e9
-    v_min_i = 0
+    cur_min_d = 1e9
+    cur_min_i = -1
+    last_end = -min_lap_pts
+
+    def finalize():
+        nonlocal last_end
+        if in_near and armed and (cur_min_i - last_end) >= min_lap_pts:
+            lap_d = path_len(last_end, cur_min_i) if last_end >= 0 else max_d * 2
+            if lap_d >= min_lap_dist or last_end < 0:
+                lap_ends.append(cur_min_i)
+                last_end = cur_min_i
 
     for idx in range(len(points)):
-        d = all_dists[idx]
-        if d < near_thr:
+        d = dists[idx]
+        if d > far_thr:
+            away_cnt += 1
+            if away_cnt >= min_away:
+                armed = True
+            if in_near:
+                finalize()
+                in_near = False
+                cur_min_d = 1e9
+                cur_min_i = -1
+        elif armed and d < near_thr:
+            away_cnt = 0
             if not in_near:
                 in_near = True
-                v_start = idx
-                v_min_d = d
-                v_min_i = idx
-            if d < v_min_d:
-                v_min_d = d
-                v_min_i = idx
+                cur_min_d = d
+                cur_min_i = idx
+            if d < cur_min_d:
+                cur_min_d = d
+                cur_min_i = idx
         else:
+            away_cnt = 0
             if in_near:
-                visits.append((v_start, idx - 1, v_min_d, v_min_i))
+                finalize()
                 in_near = False
-    if in_near:
-        visits.append((v_start, len(points) - 1, v_min_d, v_min_i))
+                cur_min_d = 1e9
+                cur_min_i = -1
+    finalize()
 
-    # 至少3次经过（起始+2圈以上）
-    if len(visits) < 3: return False, []
-
-    # 每次经过 = 一圈。跳过起始位置
-    lap_ends = []
-    for vs, ve, md, mi in visits:
-        if vs == 0:
-            continue
-        lap_ends.append(mi)
-
+    # 至少 2 次回归才算绕圈（排除折返跑）
     if len(lap_ends) < 2: return False, []
 
-    # 构建圈数据，所有点取自原始FIT数据
+    # 圈长一致性检查：排除非绕圈大路线(登山等)被误判
+    seg_lens = [path_len(0, lap_ends[0])]
+    for k in range(1, len(lap_ends)):
+        seg_lens.append(path_len(lap_ends[k-1] + 1, lap_ends[k]))
+    if min(seg_lens) < max(seg_lens) * 0.5:
+        return False, []
+
+    # 构建 lap 数据：每个回归区间为一圈
     laps = []
     prev = 0
-    # 活动实际终点到起点的距离
-    activity_end_d = all_dists[-1]
     for lap_idx, end in enumerate(lap_ends):
         is_closed = True
         if lap_idx == len(lap_ends) - 1:
-            # 最后一圈：用活动实际终点判断，而非visit的近区阈值
-            # 只有终点离起点 < 10m 才算真正回到起点
-            if activity_end_d > 10:
+            # 最后一圈：用最近点(该圈终点)到起点的距离判断，阈值留 20m 容 GPS 噪声
+            if dists[end] > 20:
                 is_closed = False
         laps.append(_make_lap(points, lap_idx, prev, end, closed=is_closed))
-        prev = end
+        prev = end + 1
+    # 最后一段（未回到起点的尾巴）
     if prev < len(points) - 5:
         laps.append(_make_lap(points, len(lap_ends), prev, len(points)-1, closed=False))
 
@@ -306,8 +337,8 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 .stat-bar .val.sm{font-size:11px;font-weight:500;color:#ccc}
 .stat-bar .lbl{font-size:8px;color:#666;letter-spacing:.3px;white-space:nowrap}
 .stat-bar .sep{width:1px;height:18px;background:rgba(255,255,255,.08);flex-shrink:0}
-.chart-area{padding:2px 12px 6px;height:80px;position:relative}
-.chart-area canvas{width:100%!important;height:70px!important}
+.chart-area{padding:2px 12px 6px;height:160px;position:relative}
+.chart-area canvas{width:100%!important;height:150px!important}
 
 /* Leaflet缩放按钮避让 */
 .leaflet-control-zoom{transition:left .3s ease}
@@ -323,8 +354,8 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
     max-height:40vh;font-size:12px}
   .stat-bar .val{font-size:12px}
   .stat-bar .val.sm{font-size:10px}
-  .chart-area{height:60px}
-  .chart-area canvas{height:50px!important}
+  .chart-area{height:90px}
+  .chart-area canvas{height:80px!important}
   .file-box select{max-width:130px}
 }
 </style>
@@ -376,24 +407,23 @@ var curMapIdx=0;
 
 function initMap(){
   if(mp){mp.remove();mp=null}
-  mp=L.map('map',{zoomControl:true,tap:true,preferCanvas:true});
+  mp=L.map('map',{zoomControl:true,tap:true,preferCanvas:true,maxZoom:22});
   // 街道图
   mapLayers[0].layer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    {attribution:'© OpenStreetMap',maxZoom:19});
+    {attribution:'© OpenStreetMap',maxNativeZoom:19,maxZoom:22});
   // 卫星图 (Esri WorldImagery, 免费无需API key)
   mapLayers[1].layer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    {attribution:'© Esri WorldImagery',maxZoom:18});
+    {attribution:'© Esri WorldImagery',maxNativeZoom:18,maxZoom:22});
   // 地形图 (OpenTopoMap)
   mapLayers[2].layer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    {attribution:'© OpenTopoMap',maxZoom:17});
+    {attribution:'© OpenTopoMap',maxNativeZoom:17,maxZoom:22});
   // 混合图 (Esri卫星+标签)
   mapLayers[3].layer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-    {attribution:'© Esri',maxZoom:19,opacity:0.7});
+    {attribution:'© Esri',maxNativeZoom:19,maxZoom:22,opacity:0.7});
 
   // 默认卫星图
   mapLayers[1].layer.addTo(mp);
   document.getElementById('bM').textContent='卫星';
-  document.getElementById('bM').classList.add('on');
   curMapIdx=1;
   mp.setView([0,0],13);
   // 缩放按钮默认右移（避让侧边栏）
@@ -401,6 +431,8 @@ function initMap(){
   if(zoomCtrl) zoomCtrl.classList.add('shifted');
   // 点击地图空白处关闭信息面板
   mp.on('click',function(){document.getElementById('pnl').style.display='none'});
+  // 鼠标离开地图容器时清除悬停高亮
+  document.getElementById('map').addEventListener('mouseleave',function(){hideHoverPoint()});
 }
 
 function cycleMap(){
@@ -415,7 +447,6 @@ function cycleMap(){
   }
   var btn=document.getElementById('bM');
   btn.textContent=mapLayers[curMapIdx].name;
-  btn.classList.toggle('on',curMapIdx!==0);
 }
 
 function loadFile(i){
@@ -476,12 +507,15 @@ function addCts(){
   var v;
   if(al>=0){v=useKm?KMPT[al]:LPP[al];if(!v)return}
   else{v=P}
+  var base=al>=0?(useKm?KM[al].si:LP[al].si):0;
   v.forEach(function(p,i){
     var m=L.circleMarker([p.lat,p.lon],
       {radius:8,color:'transparent',fillColor:'transparent',weight:0,fillOpacity:0,interactive:true}
     ).addTo(mp);
-    m.on('click',function(e){L.DomEvent.stopPropagation(e);showP(p,i)});
-    m.on('touchstart',function(){showP(p,i)});
+    var idx=base+i;
+    m.on('click',function(e){L.DomEvent.stopPropagation(e);showP(p,idx)});
+    m.on('touchstart',function(){showP(p,idx)});
+    m.on('mouseover',function(){showHoverPoint(idx)});
     cts.push(m);
   });
 }
@@ -493,7 +527,7 @@ function showP(p,idx){
   var pace=paceSec>0?(paceSec>1200?'慢':Math.floor(paceSec/60)+"'"+String(paceSec%60).padStart(2,'0')+'"'):'--\'--"';
   var ln=0;
   if(HAS)for(var j=0;j<LP.length;j++)if(idx>=LP[j].si&&idx<=LP[j].ei){ln=j+1;break}
-  var lapInfo=ln?(useKm?('第'+ln+'公里'):(LP[ln-1].closed?'<span style="color:#00e676">闭合</span>':'<span style="color:#ff9100">未闭合</span>')):'';
+  var lapInfo=ln?(useKm?('第'+ln+'公里'):('第'+ln+'圈')):'';
   pn.innerHTML=
     '<h3>#'+(idx+1)+(ln?' '+lapInfo+' ':'')+'</h3>'+
     '<div class="r"><span class="l">时间</span><span class="v">'+(p.time||'--')+'</span></div>'+
@@ -503,7 +537,7 @@ function showP(p,idx){
     '<div class="r"><span class="l">配速</span><span class="v">'+pace+'/km</span></div>'+
     '<div class="r"><span class="l">海拔</span><span class="v">'+p.alt+' m</span></div>'+
     '<div class="sp"></div>'+
-    '<div class="r"><span class="l">距离</span><span class="v">'+(p.dst/1000).toFixed(2)+' km</span></div>'+
+    '<div class="r"><span class="l">距离</span><span class="v">'+(p.cum/1000).toFixed(2)+' km</span></div>'+
     '<div class="r"><span class="l">踏频</span><span class="v">'+(p.cad||'--')+' spm</span></div>';
   pn.style.display='block';
 }
@@ -613,6 +647,7 @@ function buildSb(){
 
 function sL(i){
   al=i;
+  hideHoverPoint();
   document.querySelectorAll('.card').forEach(function(c){c.classList.remove('on')});
   if(i===-1)document.querySelector('.card').classList.add('on');
   else document.getElementById('c'+i).classList.add('on');
@@ -638,14 +673,25 @@ function tSb(){
 function cMod(){
   cm=['hr','spd','alt'][(['hr','spd','alt'].indexOf(cm)+1)%3];
   document.getElementById('bC').textContent={hr:'心率',spd:'速度',alt:'海拔'}[cm];
-  document.getElementById('bC').classList.toggle('on',cm!=='hr');
   if(al===-1){draw();addCts()}
 }
 
 // ===== 图表 =====
 var chartObj=null;
+var hoverMk=null;    // 图表悬停时地图上的高亮点
+var hoverIdx=-1;     // 当前悬停的原始点索引
+
+function paceStr(spd){
+  if(!spd||spd<=0) return "--'--\"";
+  var s=Math.round(1000/spd);
+  if(s>1200) return "慢";
+  return Math.floor(s/60)+"'"+(s%60<10?'0':'')+(s%60)+'"';
+}
+
 function drawChart(){
   if(chartObj){chartObj.destroy();chartObj=null}
+  if(hoverMk){mp.removeLayer(hoverMk);hoverMk=null}
+  hoverIdx=-1;
   var cv=document.getElementById('chart');
   if(!cv||typeof Chart==='undefined')return;
   // 采样: 最多200个点
@@ -672,9 +718,31 @@ function drawChart(){
     },
     options:{
       responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:true,labels:{color:'#aaa',font:{size:10},
-        boxWidth:12,padding:6},position:'top'}},
+      plugins:{
+        legend:{display:true,labels:{color:'#aaa',font:{size:10},boxWidth:12,padding:6},position:'top'},
+        tooltip:{
+          callbacks:{
+            title:function(items){
+              var idx=labels[items[0].dataIndex];
+              return (P[idx].time||'')+'  #'+(idx+1);
+            },
+            label:function(ctx){
+              var p=P[labels[ctx.dataIndex]];
+              if(ctx.datasetIndex===0) return '配速: '+paceStr(p.spd)+'/km';
+              if(ctx.datasetIndex===1) return '心率: '+(p.hr||'--')+' bpm';
+              return '海拔: '+(p.alt!=null?p.alt:'--')+' m';
+            }
+          }
+        }
+      },
       interaction:{intersect:false,mode:'index'},
+      onHover:function(evt,items){
+        if(items&&items.length){
+          showHoverPoint(labels[items[0].index]);
+        } else {
+          hideHoverPoint();
+        }
+      },
       scales:{
         x:{display:false},
         y:{display:false,reverse:true,min:0},
@@ -683,6 +751,27 @@ function drawChart(){
       }
     }
   });
+}
+
+// ===== 图表悬停 → 地图/信息框联动 =====
+function showHoverPoint(idx){
+  if(idx===hoverIdx) return;
+  hoverIdx=idx;
+  var p=P[idx];
+  if(!p||!mp) return;
+  if(!hoverMk){
+    hoverMk=L.circleMarker([p.lat,p.lon],
+      {radius:9,color:'#ffeb3b',weight:3,fillColor:'#ffeb3b',fillOpacity:0.9})
+      .addTo(mp);
+  } else {
+    hoverMk.setLatLng([p.lat,p.lon]);
+  }
+  showP(p,idx);
+}
+
+function hideHoverPoint(){
+  if(hoverMk){mp.removeLayer(hoverMk);hoverMk=null}
+  hoverIdx=-1;
 }
 
 // ===== 文件切换 =====
