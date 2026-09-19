@@ -9,7 +9,7 @@ FIT 运动轨迹双端查看器
 """
 import sys, os, json, math, webbrowser, subprocess
 import fitparse
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 SEMI2DEG = 180.0 / 2147483648.0
 LAP_COLORS = [
@@ -51,6 +51,7 @@ def parse_fit(path):
     points = []
     cum = 0.0
     prev = None
+    local_tz = datetime.now().astimezone().tzinfo  # 系统本地时区
     for r in records:
         lat, lon = r.get("position_lat"), r.get("position_long")
         if lat is None or lon is None: continue
@@ -60,10 +61,15 @@ def parse_fit(path):
         if prev is not None:
             cum += haversine(prev[0], prev[1], clat, clon)
         prev = (clat, clon)
+        # 时间：FIT 的 timestamp 是 UTC，转到系统本地时区显示
+        time_str = ""
+        if isinstance(ts, datetime):
+            t = ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+            time_str = t.astimezone(local_tz).strftime("%H:%M:%S")
         points.append({
             "lat": clat,
             "lon": clon,
-            "time": ts.strftime("%H:%M:%S") if isinstance(ts, datetime) else "",
+            "time": time_str,
             "ts": ts,
             "hr": r.get("heart_rate"),
             "spd": round(r.get("speed", 0) or 0, 2),
