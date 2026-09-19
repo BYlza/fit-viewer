@@ -153,7 +153,13 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
     laps = []
     prev = 0
     for lap_idx, end in enumerate(lap_ends):
-        laps.append(_make_lap(points, lap_idx, prev, end, closed=True))
+        # 最后一圈：检查终点是否真正回到起点附近
+        is_closed = True
+        if lap_idx == len(lap_ends) - 1:
+            end_d = all_dists[end] if end < len(all_dists) else 0
+            if end_d > near_thr:
+                is_closed = False
+        laps.append(_make_lap(points, lap_idx, prev, end, closed=is_closed))
         prev = end
     if prev < len(points) - 5:
         laps.append(_make_lap(points, len(lap_ends), prev, len(points)-1, closed=False))
