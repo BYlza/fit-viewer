@@ -19,7 +19,7 @@ def main():
     run(
         f'{sys.executable} -m PyInstaller '
         f'--onefile --windowed '
-        f'--name "FIT查看器" '
+        f'--name "FIT-Viewer" '
         f'--hidden-import tkinter '
         f'--clean '
         f'fit_viewer.py'

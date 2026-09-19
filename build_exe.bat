@@ -8,18 +8,17 @@ echo ========================================
 pip install pyinstaller fitparse
 
 :: 打包（单文件模式，包含 tkinter）
-pyinstaller --onefile --windowed --name "FIT查看器" ^
+pyinstaller --onefile --windowed --name "FIT-Viewer" ^
     --icon=NONE ^
-    --add-data "Zepp20260916211459.fit;." ^
     --hidden-import tkinter ^
     --clean ^
     fit_viewer.py
 
 echo.
 echo ========================================
-if exist "dist\FIT查看器.exe" (
+if exist "dist\FIT-Viewer.exe" (
     echo BUILD SUCCESS!
-    echo Output: dist\FIT查看器.exe
+    echo Output: dist\FIT-Viewer.exe
 ) else (
     echo BUILD FAILED - check output above
 )

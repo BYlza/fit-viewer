@@ -703,20 +703,40 @@ function drawChart(){
   // 采样: 最多200个点
   var step=Math.max(1,Math.floor(P.length/200));
   var labels=[],hrData=[],altData=[],paceData=[];
+  var hrMin=null,hrMax=null,paceMin=null,paceMax=null;
+  var hrWarmupEnd=Math.floor(P.length*0.10);   // 心率：跳过前 10% 热身段
+  var paceWarmupEnd=Math.floor(P.length*0.15); // 配速：跳过前 15% 热身段
   for(var i=0;i<P.length;i+=step){
     labels.push(i);
-    hrData.push(P[i].hr||null);
+    var h=P[i].hr;
+    hrData.push(h||null);
     altData.push(P[i].alt||null);
-    paceData.push(P[i].spd>0?Math.round(1000/P[i].spd/60):null); // min/km
+    // 配速保留 1 位小数(精确到 0.1min≈6秒)，让变化更精细
+    var pm=P[i].spd>0?Math.round(1000/P[i].spd/60*10)/10:null;
+    paceData.push(pm);
+    if(i>=hrWarmupEnd){
+      if(h){ if(hrMin===null||h<hrMin)hrMin=h; if(hrMax===null||h>hrMax)hrMax=h; }
+    }
+    if(i>=paceWarmupEnd){
+      if(pm!==null){ if(paceMin===null||pm<paceMin)paceMin=pm; if(paceMax===null||pm>paceMax)paceMax=pm; }
+    }
   }
+  // 心率轴：不反转（数值越大越靠上），收窄到主体波动范围
+  var hrAxis={display:false};
+  if(hrMin!==null&&hrMax!==null){ hrAxis.min=hrMin-5; hrAxis.max=hrMax+5; }
+  else { hrAxis.min=40; }
+  // 配速轴：反转（数值越小越快越靠上），收窄到主体波动范围
+  var paceAxis={display:false,reverse:true};
+  if(paceMin!==null&&paceMax!==null){ paceAxis.min=paceMin-0.2; paceAxis.max=paceMax+0.2; }
+  else { paceAxis.min=0; }
   chartObj=new Chart(cv,{
     type:'line',
     data:{
       labels:labels,
       datasets:[
-        {label:'配速',data:paceData,borderColor:'#ff6b6b',borderWidth:1.5,
+        {label:'配速',data:paceData,borderColor:'#ffd93d',borderWidth:1.5,
          pointRadius:0,tension:.3,yAxisID:'y',spanGaps:true},
-        {label:'心率',data:hrData,borderColor:'#ffd93d',borderWidth:1.5,
+        {label:'心率',data:hrData,borderColor:'#ff6b6b',borderWidth:1.5,
          pointRadius:0,tension:.3,yAxisID:'y1',spanGaps:true},
         {label:'海拔',data:altData,borderColor:'#6bcb77',borderWidth:1.5,
          pointRadius:0,tension:.3,yAxisID:'y2',spanGaps:true}
@@ -751,8 +771,8 @@ function drawChart(){
       },
       scales:{
         x:{display:false},
-        y:{display:false,reverse:true,min:0},
-        y1:{display:false,reverse:true,min:40},
+        y:paceAxis,
+        y1:hrAxis,
         y2:{display:false}
       }
     }
