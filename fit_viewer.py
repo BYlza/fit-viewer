@@ -268,6 +268,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 <!-- 顶部工具栏 -->
 <div class="toolbar" id="tbWrap">
   <button class="tb" id="bL" onclick="tSb()" style="display:none">圈数</button>
+  <button class="tb" id="bM" onclick="cycleMap()">卫星</button>
   <button class="tb" id="bC" onclick="cMod()">心率</button>
 </div>
 
@@ -286,12 +287,48 @@ var ALL=@DATA@, FNAMES=@FILENAMES@;
 var ci=0,P,S,LP,LPP,CLR,HAS;
 var mp=null,cm='hr',al=-1,segs=[],cts=[];
 
+// ===== 地图图层 =====
+var mapLayers=[
+  {name:'街道',layer:null},
+  {name:'卫星',layer:null},
+  {name:'地形',layer:null},
+  {name:'混合',layer:null}
+];
+var curMapIdx=0;
+
 function initMap(){
   if(mp){mp.remove();mp=null}
   mp=L.map('map',{zoomControl:true,tap:true,preferCanvas:true});
-  mp.addLayer(L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    {attribution:'© OSM',maxZoom:19}));
+  // 街道图
+  mapLayers[0].layer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {attribution:'© OpenStreetMap',maxZoom:19});
+  // 卫星图 (Esri WorldImagery, 免费无需API key)
+  mapLayers[1].layer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {attribution:'© Esri WorldImagery',maxZoom:18});
+  // 地形图 (OpenTopoMap)
+  mapLayers[2].layer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    {attribution:'© OpenTopoMap',maxZoom:17});
+  // 混合图 (Esri卫星+标签)
+  mapLayers[3].layer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+    {attribution:'© Esri',maxZoom:19,opacity:0.7});
+
+  mapLayers[0].layer.addTo(mp);
   mp.setView([0,0],13);
+}
+
+function cycleMap(){
+  mp.removeLayer(mapLayers[curMapIdx].layer);
+  curMapIdx=(curMapIdx+1)%mapLayers.length;
+  if(curMapIdx===3){
+    // 混合图：卫星底图+标签叠加
+    mapLayers[1].layer.addTo(mp);
+    mapLayers[3].layer.addTo(mp);
+  } else {
+    mapLayers[curMapIdx].layer.addTo(mp);
+  }
+  var btn=document.getElementById('bM');
+  btn.textContent=mapLayers[curMapIdx].name;
+  btn.classList.toggle('on',curMapIdx!==0);
 }
 
 function loadFile(i){
