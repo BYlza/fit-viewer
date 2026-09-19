@@ -205,13 +205,16 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 
 /* 顶部工具栏 */
 .toolbar{position:fixed;top:10px;left:10px;z-index:200;
-  display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+  transition:left .3s ease}
+.toolbar.shifted{left:240px}
 .tb{background:rgba(15,15,30,.85);backdrop-filter:blur(8px);border:none;
   border-radius:8px;padding:7px 12px;color:#eee;font-size:12px;
   cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);
   transition:all .2s;white-space:nowrap}
 .tb:hover{background:rgba(40,40,60,.95)}
 .tb.on{background:rgba(100,140,255,.3);color:#8ab4ff}
+.tb.disabled{opacity:.35;cursor:default;pointer-events:none}
 
 /* 文件选择器 */
 .file-box{position:fixed;top:10px;right:10px;z-index:200}
@@ -252,6 +255,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 @media(max-width:600px){
   .side{width:190px}
   .side.off{transform:translateX(-190px)}
+  .toolbar.shifted{left:200px}
   .info{width:calc(100vw - 20px);right:10px;left:10px;top:auto;bottom:66px;
     max-height:40vh;font-size:12px}
   .stat-bar{padding:4px 6px 6px}
@@ -344,6 +348,13 @@ function loadFile(i){
   P=d.pts;S=d.sm;LP=d.laps;LPP=d.lap_pts;CLR=d.clr;HAS=d.has;
   al=-1;
   document.getElementById('pnl').style.display='none';
+  // 圈数按钮：无圈数时变灰不可按
+  var bL=document.getElementById('bL');
+  if(!HAS||!LP.length){
+    bL.classList.add('disabled');bL.style.display='';
+  } else {
+    bL.classList.remove('disabled');bL.style.display='';
+  }
   if(!mp)initMap();
   buildSb();draw();addCts();buildStat();
   document.getElementById('fSel').value=i;
@@ -496,7 +507,12 @@ function sL(i){
   else document.getElementById('c'+i).classList.add('on');
   draw();addCts();document.getElementById('pnl').style.display='none';
 }
-function tSb(){document.getElementById('sb').classList.toggle('off')}
+function tSb(){
+  var bL=document.getElementById('bL');
+  if(bL.classList.contains('disabled'))return;
+  document.getElementById('sb').classList.toggle('off');
+  document.getElementById('tbWrap').classList.toggle('shifted');
+}
 
 // ===== 颜色模式 =====
 function cMod(){
