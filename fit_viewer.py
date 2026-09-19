@@ -265,7 +265,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 #map{position:fixed;inset:0;z-index:0}
 
 /* 左侧面板 */
-.side{position:fixed;top:0;left:0;bottom:56px;z-index:100;width:230px;
+.side{position:fixed;top:0;left:0;bottom:240px;z-index:100;width:230px;
   background:rgba(15,15,30,.95);backdrop-filter:blur(10px);
   display:flex;flex-direction:column;transition:transform .3s ease;
   border-right:1px solid rgba(255,255,255,.08)}
@@ -346,7 +346,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 
 /* 移动端适配 */
 @media(max-width:600px){
-  .side{width:190px}
+  .side{width:190px;bottom:160px}
   .side.off{transform:translateX(-190px)}
   .toolbar.shifted{left:220px}
   .leaflet-control-zoom.shifted{left:200px!important}
@@ -820,6 +820,14 @@ def gen_html(all_file_data, out):
         f.write(html)
     return out
 
+def find_fits(folder):
+    """返回文件夹下所有 .fit 文件(按名称排序)。"""
+    try:
+        return sorted(os.path.join(folder, f) for f in os.listdir(folder)
+                      if f.lower().endswith(".fit"))
+    except OSError:
+        return []
+
 def pick_files():
     try:
         import tkinter as tk
@@ -827,11 +835,10 @@ def pick_files():
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
-        paths = filedialog.askopenfilenames(
-            title="选择 FIT 文件(可多选)",
-            filetypes=[("FIT 文件", "*.fit *.FIT"), ("所有文件", "*.*")])
+        folder = filedialog.askdirectory(title="选择包含 FIT 文件的文件夹")
         root.destroy()
-        if paths: return list(paths)
+        if folder:
+            return find_fits(folder)
     except: pass
     return []
 
@@ -867,12 +874,21 @@ def open_window(path):
 def main():
     fit_paths = []
     for arg in sys.argv[1:]:
-        if os.path.isfile(arg): fit_paths.append(arg)
+        if os.path.isdir(arg):
+            fit_paths.extend(find_fits(arg))
+        elif os.path.isfile(arg):
+            fit_paths.append(arg)
     if not fit_paths: fit_paths = pick_files()
     if not fit_paths:
-        d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Zepp20260916211459.fit")
-        if os.path.isfile(d): fit_paths = [d]
-        else: print("No file selected."); sys.exit(1)
+        # 回退：扫描脚本所在目录及其子目录
+        base = os.path.dirname(os.path.abspath(__file__))
+        for root, _dirs, files in os.walk(base):
+            for f in files:
+                if f.lower().endswith(".fit"):
+                    fit_paths.append(os.path.join(root, f))
+        fit_paths.sort()
+        if not fit_paths:
+            print("No FIT files selected."); sys.exit(1)
 
     out = os.path.join(os.path.dirname(os.path.abspath(fit_paths[0])), "fit_route.html")
     all_data = []

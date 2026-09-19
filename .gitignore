@@ -12,8 +12,8 @@ dist/
 # 生成文件
 fit_route.html
 
-# FIT 数据文件（可选：如需跟踪数据则取消注释）
-# *.fit
+# FIT 数据文件（含个人位置信息，默认不跟踪）
+*.fit
 
 # IDE
 .vscode/
