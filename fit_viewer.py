@@ -113,51 +113,39 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
 
     far_thr = max_d * 0.50
     near_thr = max_d * 0.25
+    # 预计算全局距离
+    all_dists = [haversine(rlat, rlon, p["lat"], p["lon"]) for p in points]
 
-    lap_ends = []
-    away_cnt = 0
-    away_seen = False
-    prev_start = 0
-    min_dist = 1e9
-    min_idx = 0
+    # 方法：找所有"经过起点"的区间，每个区间=一圈
+    # 连续的近区点合并为一次"经过"
+    visits = []  # [(start_idx, end_idx, min_dist, min_dist_idx)]
+    in_near = False
+    v_start = 0
+    v_min_d = 1e9
+    v_min_i = 0
 
     for idx in range(len(points)):
-        lsp = points[prev_start]
-        d = haversine(lsp["lat"], lsp["lon"], points[idx]["lat"], points[idx]["lon"])
-
-        if not away_seen:
-            if d > far_thr:
-                away_cnt += 1
-                if away_cnt >= min_away:
-                    away_seen = True
-                    min_dist = 1e9
-                    min_idx = idx
-                    gap = 0
+        d = all_dists[idx]
+        if d < near_thr:
+            if not in_near:
+                in_near = True
+                v_start = idx
+                v_min_d = d
+                v_min_i = idx
+            if d < v_min_d:
+                v_min_d = d
+                v_min_i = idx
         else:
-            if d < min_dist:
-                min_dist = d
-                min_idx = idx
-            # 在远区：累计gap
-            if d > near_thr:
-                gap += 1
-            # 回到近区：要求足够的远区停留（gap>=min_away）
-            if d < near_thr and gap >= min_away and (idx - prev_start) >= min_lap_pts:
-                lap_d = sum(
-                    haversine(points[j-1]["lat"], points[j-1]["lon"],
-                              points[j]["lat"], points[j]["lon"])
-                    for j in range(prev_start + 1, min_idx + 1)
-                ) if min_idx > prev_start else 0
-                if lap_d >= min_lap_dist or prev_start == 0:
-                    lap_ends.append(min_idx)
-                    prev_start = min_idx
-                away_seen = False
-                away_cnt = 0
-                gap = 0
-            elif d < near_thr:
-                # 回到近区但gap不够 → 重置远区状态，重新开始
-                away_seen = False
-                away_cnt = 0
-                gap = 0
+            if in_near:
+                visits.append((v_start, idx - 1, v_min_d, v_min_i))
+                in_near = False
+    if in_near:
+        visits.append((v_start, len(points) - 1, v_min_d, v_min_i))
+
+    # 每次经过起点 = 一圈
+    lap_ends = []
+    for vs, ve, md, mi in visits:
+        lap_ends.append(mi)
 
     if len(lap_ends) < 2: return False, []
     laps = []
