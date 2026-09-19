@@ -132,11 +132,16 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
                     away_seen = True
                     min_dist = 1e9
                     min_idx = idx
+                    gap = 0
         else:
             if d < min_dist:
                 min_dist = d
                 min_idx = idx
-            if d < near_thr and (idx - prev_start) >= min_lap_pts:
+            # 在远区：累计gap
+            if d > near_thr:
+                gap += 1
+            # 回到近区：要求足够的远区停留（gap>=min_away）
+            if d < near_thr and gap >= min_away and (idx - prev_start) >= min_lap_pts:
                 lap_d = sum(
                     haversine(points[j-1]["lat"], points[j-1]["lon"],
                               points[j]["lat"], points[j]["lon"])
@@ -147,6 +152,12 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
                     prev_start = min_idx
                 away_seen = False
                 away_cnt = 0
+                gap = 0
+            elif d < near_thr:
+                # 回到近区但gap不够 → 重置远区状态，重新开始
+                away_seen = False
+                away_cnt = 0
+                gap = 0
 
     if len(lap_ends) < 2: return False, []
     laps = []
@@ -157,15 +168,33 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
     if prev < len(points) - 5:
         laps.append(_make_lap(points, len(lap_ends), prev, len(points)-1, closed=False))
 
-    # 圈距一致性检查：排除GPS噪声导致的误检
+    # 圈距一致性验证：确保每圈距离合理
     closed_dists = [l["d"] for l in laps if l["closed"] and l["d"] > 0]
-    if len(closed_dists) >= 2:
-        avg_d = sum(closed_dists) / len(closed_dists)
-        variance = sum((d - avg_d) ** 2 for d in closed_dists) / len(closed_dists)
-        cv = (variance ** 0.5) / avg_d if avg_d > 0 else 1
-        min_d = min(closed_dists)
-        # CV过大 或 有圈距离不到平均的一半 → 判定为非绕圈
-        if cv > 0.40 or min_d < avg_d * 0.50:
+    if len(closed_dists) < 2:
+        return False, []
+
+    avg_d = sum(closed_dists) / len(closed_dists)
+
+    # 检测交替模式：圈距一大一小交替说明被错误拆分
+    # 例如 [400, 780, 400, 780] 应合并为 [1180, 1180]
+    if len(closed_dists) >= 4:
+        alt_count = 0
+        for i in range(1, len(closed_dists)):
+            if abs(closed_dists[i] - closed_dists[i-1]) > avg_d * 0.30:
+                alt_count += 1
+        # 超过一半的相邻圈有显著差异 → 交替模式
+        if alt_count > len(closed_dists) * 0.50:
+            return False, []
+
+    # 每圈必须在均值±35%内
+    consistent = [d for d in closed_dists if avg_d * 0.65 <= d <= avg_d * 1.35]
+    if len(consistent) < max(2, len(closed_dists) * 0.60):
+        return False, []
+    if len(consistent) >= 2:
+        c_avg = sum(consistent) / len(consistent)
+        c_var = sum((d - c_avg) ** 2 for d in consistent) / len(consistent)
+        c_cv = (c_var ** 0.5) / c_avg if c_avg > 0 else 1
+        if c_cv > 0.30:
             return False, []
 
     return True, laps
