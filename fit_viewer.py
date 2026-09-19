@@ -117,21 +117,23 @@ def detect_loops(points, min_away=8, min_lap_pts=50, min_lap_dist=80):
     # 构建 lap 数据
     laps = []
     prev = 0
+    snap_lat, snap_lon = points[0]["lat"], points[0]["lon"]
 
-    # 有回归事件：每个回归区间为一圈，最后一段为不闭合圈
     if lap_ends:
         for lap_idx, end in enumerate(lap_ends):
-            laps.append(_make_lap(points, lap_idx, prev, end, closed=True))
+            lap, snap_lat, snap_lon = _make_lap(
+                points, lap_idx, prev, end, closed=True,
+                snap_lat=snap_lat, snap_lon=snap_lon)
+            laps.append(lap)
             prev = end + 1
-        # 最后一段（不闭合圈）
         if prev < len(points):
-            laps.append(_make_lap(points, len(lap_ends), prev, len(points)-1, closed=False))
+            lap, _, _ = _make_lap(points, len(lap_ends), prev, len(points)-1, closed=False)
+            laps.append(lap)
     else:
         return False, []
-
     return True, laps
 
-def _make_lap(points, idx, si, ei, closed):
+def _make_lap(points, idx, si, ei, closed, snap_lat=None, snap_lon=None):
     lp = points[si:ei+1]
     ld = sum(haversine(lp[j-1]["lat"],lp[j-1]["lon"],lp[j]["lat"],lp[j]["lon"])
              for j in range(1, len(lp)))
@@ -140,12 +142,35 @@ def _make_lap(points, idx, si, ei, closed):
     hrs = [p["hr"] for p in lp if p.get("hr")]
     ahr = int(sum(hrs)/len(hrs)) if hrs else None
     asp = round(ld / el, 2) if el > 0 else None
+
+    out_pts = []
+    for p in lp:
+        cp = dict(p)
+        cp.pop("ts", None)
+        out_pts.append(cp)
+    if closed:
+        # 起点吸附到上一圈的终点，保持圈间连续
+        if snap_lat is not None and out_pts:
+            out_pts[0]["lat"] = round(snap_lat, 6)
+            out_pts[0]["lon"] = round(snap_lon, 6)
+        # 末点吸附到该圈的起点，形成闭合
+        first_lat = out_pts[0]["lat"]
+        first_lon = out_pts[0]["lon"]
+        if out_pts:
+            out_pts[-1]["lat"] = first_lat
+            out_pts[-1]["lon"] = first_lon
+        new_snap_lat = first_lat
+        new_snap_lon = first_lon
+    else:
+        new_snap_lat = snap_lat
+        new_snap_lon = snap_lon
+
     return {
         "i": idx + 1, "si": si, "ei": ei,
         "d": round(ld, 1), "t": round(el),
         "hr": ahr, "spd": asp, "pace": speed_to_pace(asp),
-        "n": len(lp), "closed": closed,
-    }
+        "n": len(lp), "closed": closed, "pts": out_pts,
+    }, new_snap_lat, new_snap_lon
 
 # ─── HTML 模板 ─────────────────────────────────
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -258,7 +283,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 var ALL = @DATA@;
 var FNAMES = @FILENAMES@;
 
-var ci=0, P, S, LP, CLR, HAS;
+var ci=0, P, S, LP, LPP, CLR, HAS;
 var mp=null, cm='hr', al=-1;
 var segs=[], cts=[];
 
@@ -273,7 +298,7 @@ function initMap(){
 
 function loadFile(i){
   ci=i; var d=ALL[i];
-  P=d.pts; S=d.sm; LP=d.laps; CLR=d.clr; HAS=d.has;
+  P=d.pts; S=d.sm; LP=d.laps; LPP=d.lap_pts; CLR=d.clr; HAS=d.has;
   al=-1;
   document.getElementById('pnl').style.display='none';
   if(!mp)initMap();
@@ -291,37 +316,62 @@ function pc(p){return cm==='spd'?sc(p.spd):cm==='alt'?ac(p.alt):hc(p.hr)}
 // ===== 绘制轨迹 =====
 function draw(){
   segs.forEach(function(s){mp.removeLayer(s)});segs=[];
-  var v=al>=0?P.filter(function(_,i){return i>=LP[al].si&&i<=LP[al].ei}):P;
+  // 选圈时用该圈独立点数据（末点已吸附起点），全部时用全局点
+  var v=al>=0?LPP[al]:P;
+  if(!v||!v.length)return;
   for(var i=0;i<v.length-1;i++){
     var c=HAS&&al>=0?CLR[al%CLR.length]:pc(v[i]);
     segs.push(L.polyline([[v[i].lat,v[i].lon],[v[i+1].lat,v[i+1].lon]],
       {color:c,weight:4,opacity:.85}).addTo(mp));
   }
-  if(v.length){
-    mp.fitBounds(L.latLngBounds(v.map(function(p){return[p.lat,p.lon]})),{padding:[50,50]});
-    segs.push(L.circleMarker([v[0].lat,v[0].lon],
-      {radius:7,color:'#00e676',fillColor:'#00e676',fillOpacity:1,weight:2,color:'#fff'})
-      .addTo(mp).bindTooltip('起点',{direction:'top',offset:[0,-8]}));
+  mp.fitBounds(L.latLngBounds(v.map(function(p){return[p.lat,p.lon]})),{padding:[50,50]});
+  // 起点
+  segs.push(L.circleMarker([v[0].lat,v[0].lon],
+    {radius:7,fillColor:'#00e676',fillOpacity:1,weight:2,color:'#fff'})
+    .addTo(mp).bindTooltip('起点',{direction:'top',offset:[0,-8]}));
+  // 终点（闭合圈时终点≈起点，不闭合圈时显示为独立标记）
+  if(!HAS||al<0||LP[al].closed){
+    // 闭合圈：终点和起点重合，只显示起点标记
+  } else {
     segs.push(L.circleMarker([v[v.length-1].lat,v[v.length-1].lon],
-      {radius:7,color:'#ff1744',fillColor:'#ff1744',fillOpacity:1,weight:2,color:'#fff'})
-      .addTo(mp).bindTooltip('终点',{direction:'top',offset:[0,-8]}));
+      {radius:7,fillColor:'#ff1744',fillOpacity:1,weight:2,color:'#fff'})
+      .addTo(mp).bindTooltip('终点（未闭合）',{direction:'top',offset:[0,-8]}));
   }
 }
 
 // ===== 可点击层 =====
 function addCts(){
   cts.forEach(function(m){mp.removeLayer(m)});cts=[];
-  var v;
-  if(al>=0){v=[];for(var i=LP[al].si;i<=LP[al].ei&&i<P.length;i++)v.push({p:P[i],i:i})}
-  else{v=P.map(function(p,i){return{p:p,i:i}})}
-  v.forEach(function(x){
-    var m=L.circleMarker([x.p.lat,x.p.lon],
-      {radius:8,color:'transparent',fillColor:'transparent',weight:0,fillOpacity:0,interactive:true}
-    ).addTo(mp);
-    m.on('click',function(e){L.DomEvent.stopPropagation(e);showP(x.p,x.i)});
-    m.on('touchstart',function(){showP(x.p,x.i)});
-    cts.push(m);
-  });
+  // 选圈时用该圈独立点数据
+  var v, ref;
+  if(al>=0){
+    v=LPP[al]; ref=P;  // ref 用于找回原始索引
+    if(!v)return;
+    v.forEach(function(p){
+      // 在全局 P 中找最近的点索引
+      var best=0,bestD=1e9;
+      for(var k=LP[al].si;k<=LP[al].ei&&k<P.length;k++){
+        var dd=Math.abs(P[k].lat-p.lat)+Math.abs(P[k].lon-p.lon);
+        if(dd<bestD){bestD=dd;best=k}
+      }
+      var m=L.circleMarker([p.lat,p.lon],
+        {radius:8,color:'transparent',fillColor:'transparent',weight:0,fillOpacity:0,interactive:true}
+      ).addTo(mp);
+      m.on('click',function(e){L.DomEvent.stopPropagation(e);showP(p,best)});
+      m.on('touchstart',function(){showP(p,best)});
+      cts.push(m);
+    });
+  } else {
+    v=P;
+    v.forEach(function(p,i){
+      var m=L.circleMarker([p.lat,p.lon],
+        {radius:8,color:'transparent',fillColor:'transparent',weight:0,fillOpacity:0,interactive:true}
+      ).addTo(mp);
+      m.on('click',function(e){L.DomEvent.stopPropagation(e);showP(p,i)});
+      m.on('touchstart',function(){showP(p,i)});
+      cts.push(m);
+    });
+  }
 }
 
 // ===== 信息面板 =====
@@ -424,8 +474,15 @@ def gen_html(all_file_data, out):
     datasets = []
     names = []
     for fn, pts, sm, laps, has in all_file_data:
+        # 把 lap 内嵌的 pts 取出来放入 lap 数据，同时从 lap 中移除（减小体积）
+        clean_laps = []
+        for l in laps:
+            cl = dict(l)
+            cl.pop("pts", None)  # pts 在 lap 里但不放入全局 laps JSON
+            clean_laps.append(cl)
         datasets.append({
-            "pts": pts, "sm": sm, "laps": laps,
+            "pts": pts, "sm": sm, "laps": clean_laps,
+            "lap_pts": [l.get("pts", []) for l in laps],  # 每圈的轨迹点
             "clr": LAP_COLORS[:len(laps)], "has": has
         })
         names.append(fn)
