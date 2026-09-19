@@ -146,11 +146,14 @@ def detect_loops(points):
     # 构建圈数据，所有点取自原始FIT数据
     laps = []
     prev = 0
+    # 活动实际终点到起点的距离
+    activity_end_d = all_dists[-1]
     for lap_idx, end in enumerate(lap_ends):
         is_closed = True
         if lap_idx == len(lap_ends) - 1:
-            end_d = all_dists[end] if end < len(all_dists) else 0
-            if end_d > near_thr:
+            # 最后一圈：用活动实际终点判断，而非visit的近区阈值
+            # 只有终点离起点 < 10m 才算真正回到起点
+            if activity_end_d > 10:
                 is_closed = False
         laps.append(_make_lap(points, lap_idx, prev, end, closed=is_closed))
         prev = end
