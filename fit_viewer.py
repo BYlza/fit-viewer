@@ -233,15 +233,17 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 .info .hint{text-align:center;color:#666;font-size:11px;margin-top:4px}
 
 /* 底部固定统计栏 */
-.stat-bar{position:fixed;bottom:0;left:0;right:0;z-index:150;height:56px;
+.stat-bar{position:fixed;bottom:0;left:0;right:0;z-index:150;
   background:rgba(15,15,30,.95);backdrop-filter:blur(10px);
   border-top:1px solid rgba(255,255,255,.08);
-  display:flex;align-items:center;justify-content:space-around;
-  padding:0 16px;font-size:12px;color:#ccc}
-.stat-bar .item{text-align:center;line-height:1.3}
-.stat-bar .val{font-size:16px;font-weight:700;color:#fff}
-.stat-bar .lbl{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px}
-.stat-bar .sep{width:1px;height:28px;background:rgba(255,255,255,.1)}
+  padding:6px 12px 8px;font-size:12px;color:#ccc}
+.stat-row{display:flex;align-items:center;justify-content:space-around;margin-bottom:2px}
+.stat-bar .item{text-align:center;line-height:1.3;min-width:0}
+.stat-bar .val{font-size:15px;font-weight:700;color:#fff;white-space:nowrap}
+.stat-bar .val.sm{font-size:12px;font-weight:500;color:#ccc}
+.stat-bar .lbl{font-size:9px;color:#666;letter-spacing:.3px;white-space:nowrap}
+.stat-bar .sep{width:1px;height:22px;background:rgba(255,255,255,.08);flex-shrink:0}
+.stat-bar .sep.h{width:100%;height:1px;background:rgba(255,255,255,.06);margin:2px 0}
 
 /* 移动端适配 */
 @media(max-width:600px){
@@ -250,8 +252,10 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
   .toolbar.shifted{left:200px}
   .info{width:calc(100vw - 20px);right:10px;left:10px;top:auto;bottom:66px;
     max-height:40vh;font-size:12px}
-  .stat-bar{height:50px;padding:0 8px}
-  .stat-bar .val{font-size:14px}
+  .stat-bar{padding:4px 6px 6px}
+  .stat-bar .val{font-size:13px}
+  .stat-bar .val.sm{font-size:11px}
+  .stat-bar .lbl{font-size:8px}
   .file-box select{max-width:130px}
 }
 </style>
@@ -412,22 +416,49 @@ function buildStat(){
   var d=(S.dist/1000).toFixed(2);
   var apSec=S.avg_spd>0?Math.floor(1000/S.avg_spd):0;
   var ap=apSec>0?(apSec>1200?'慢':Math.floor(apSec/60)+"'"+String(apSec%60).padStart(2,'0')+'"'):'--\'--"';
+  var mpSec=S.max_spd>0?Math.floor(1000/S.max_spd):0;
+  var mp=mpSec>0?(mpSec>1200?'慢':Math.floor(mpSec/60)+"'"+String(mpSec%60).padStart(2,'0')+'"'):'--\'--"';
   var t=S.time;
   var tStr=t>=3600?(~~(t/3600)+':'+String(~~((t%3600)/60)).padStart(2,'0')+':'+String(~~(t%60)).padStart(2,'0'))
     :(~~(t/60)+':'+String(~~(t%60)).padStart(2,'0'));
+  var asc=S.asc||'--', desc=S.desc||'--';
+  var cal=S.cal||'--';
   var lapStr=HAS?LP.length:'--';
+  var avgCad='--';
+  if(P.length){
+    var cadSum=0,cadN=0;
+    for(var i=0;i<P.length;i++){if(P[i].cad){cadSum+=P[i].cad;cadN++}}
+    if(cadN>0) avgCad=Math.round(cadSum/cadN);
+  }
   document.getElementById('statBar').innerHTML=
+    // 第一行：核心数据
+    '<div class="stat-row">'+
     '<div class="item"><div class="val">'+d+'</div><div class="lbl">公里</div></div>'+
     '<div class="sep"></div>'+
     '<div class="item"><div class="val">'+tStr+'</div><div class="lbl">时长</div></div>'+
     '<div class="sep"></div>'+
     '<div class="item"><div class="val">'+ap+'</div><div class="lbl">配速/km</div></div>'+
     '<div class="sep"></div>'+
+    '<div class="item"><div class="val">'+mp+'</div><div class="lbl">最快配速</div></div>'+
+    '<div class="sep"></div>'+
     '<div class="item"><div class="val">'+(S.avg_hr||'--')+'</div><div class="lbl">平均心率</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+(S.cal||'--')+'</div><div class="lbl">千卡</div></div>'+
+    '<div class="item"><div class="val">'+(S.max_hr||'--')+'</div><div class="lbl">最高心率</div></div>'+
+    '</div>'+
+    // 第二行：辅助数据
+    '<div class="stat-row">'+
+    '<div class="item"><div class="val sm">'+cal+'</div><div class="lbl">千卡</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+lapStr+'</div><div class="lbl">圈数</div></div>';
+    '<div class="item"><div class="val sm">'+lapStr+'</div><div class="lbl">圈数</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val sm">'+asc+'m</div><div class="lbl">爬升</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val sm">'+desc+'m</div><div class="lbl">下降</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val sm">'+avgCad+'</div><div class="lbl">踏频</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val sm">'+S.sport+'</div><div class="lbl">类型</div></div>'+
+    '</div>';
 }
 
 // ===== 圈数栏 =====
