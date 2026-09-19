@@ -260,7 +260,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 /* 顶部工具栏 */
 .toolbar{position:fixed;top:10px;left:10px;z-index:200;
   display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.toolbar.shifted{left:250px}
+.toolbar.shifted{left:290px}
 .tb{background:rgba(15,15,30,.85);backdrop-filter:blur(8px);border:none;
   border-radius:8px;padding:7px 12px;color:#eee;font-size:12px;
   cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);
@@ -313,7 +313,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 @media(max-width:600px){
   .side{width:190px}
   .side.off{transform:translateX(-190px)}
-  .toolbar.shifted{left:200px}
+  .toolbar.shifted{left:220px}
   .leaflet-control-zoom.shifted{left:200px!important}
   .info{width:calc(100vw - 20px);right:10px;left:10px;top:auto;bottom:66px;
     max-height:40vh;font-size:12px}
@@ -329,14 +329,14 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 <div id="map"></div>
 
 <!-- 左侧圈数栏 -->
-<div class="side off" id="sb">
+<div class="side" id="sb">
   <div class="hd"><span id="sbT">圈数</span><button class="close" onclick="tSb()">&times;</button></div>
   <div class="lst" id="ll"></div>
 </div>
 
 <!-- 顶部工具栏 -->
 <div class="toolbar shifted" id="tbWrap">
-  <button class="tb" id="bL" onclick="tSb()" style="display:none">圈数</button>
+  <button class="tb" id="bL" onclick="tSb()">圈数</button>
   <button class="tb" id="bM" onclick="cycleMap()">卫星</button>
   <button class="tb" id="bC" onclick="cMod()">心率</button>
 </div>
@@ -392,6 +392,9 @@ function initMap(){
   document.getElementById('bM').classList.add('on');
   curMapIdx=1;
   mp.setView([0,0],13);
+  // 缩放按钮默认右移（避让侧边栏）
+  var zoomCtrl=document.querySelector('.leaflet-control-zoom');
+  if(zoomCtrl) zoomCtrl.classList.add('shifted');
   // 点击地图空白处关闭信息面板
   mp.on('click',function(){document.getElementById('pnl').style.display='none'});
 }
