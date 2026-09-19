@@ -28,6 +28,7 @@ def haversine(lat1, lon1, lat2, lon2):
 def speed_to_pace(v):
     if not v or v <= 0: return "--'--\""
     s = int(1000 / v)
+    if s > 1200: return "慢"  # >20 min/km
     return f"{s//60}'{s%60:02d}\""
 
 def sport_name(v):
@@ -350,7 +351,8 @@ function addCts(){
 // ===== 点击信息面板 =====
 function showP(p,idx){
   var pn=document.getElementById('pnl');
-  var pace=p.spd>0?(Math.floor(1000/p.spd)+"'"+String(~~(1000/p.spd)%60).padStart(2,'0')+'"'):'--\'--"';
+  var paceSec=p.spd>0?Math.floor(1000/p.spd):0;
+  var pace=paceSec>0?(paceSec>1200?'慢':Math.floor(paceSec/60)+"'"+String(paceSec%60).padStart(2,'0')+'"'):'--\'--"';
   var ln=0;
   if(HAS)for(var j=0;j<LP.length;j++)if(idx>=LP[j].si&&idx<=LP[j].ei){ln=j+1;break}
   var lapInfo=ln?(LP[ln-1].closed?'<span style="color:#00e676">闭合</span>':'<span style="color:#ff9100">未闭合</span>'):'';
@@ -371,7 +373,8 @@ function showP(p,idx){
 // ===== 底部统计栏（固定，不受选圈/选点影响）=====
 function buildStat(){
   var d=(S.dist/1000).toFixed(2);
-  var ap=S.avg_spd>0?(Math.floor(1000/S.avg_spd)+"'"+String(~~(1000/S.avg_spd)%60).padStart(2,'0')+'"'):'--\'--"';
+  var apSec=S.avg_spd>0?Math.floor(1000/S.avg_spd):0;
+  var ap=apSec>0?(apSec>1200?'慢':Math.floor(apSec/60)+"'"+String(apSec%60).padStart(2,'0')+'"'):'--\'--"';
   var t=S.time;
   var tStr=t>=3600?(~~(t/3600)+':'+String(~~((t%3600)/60)).padStart(2,'0')+':'+String(~~(t%60)).padStart(2,'0'))
     :(~~(t/60)+':'+String(~~(t%60)).padStart(2,'0'));
