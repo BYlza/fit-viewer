@@ -291,30 +291,36 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 .info .sp{border-top:1px solid rgba(255,255,255,.08);margin:8px 0}
 .info .hint{text-align:center;color:#666;font-size:11px;margin-top:4px}
 
-/* 底部固定统计栏 */
-.stat-bar{position:fixed;bottom:0;left:0;right:0;z-index:150;
+/* 底部固定区域: 统计+图表 */
+.bottom-area{position:fixed;bottom:0;left:0;right:0;z-index:150;
   background:rgba(15,15,30,.95);backdrop-filter:blur(10px);
-  border-top:1px solid rgba(255,255,255,.08);
-  padding:6px 12px 8px;font-size:12px;color:#ccc}
+  border-top:1px solid rgba(255,255,255,.08)}
+.stat-bar{padding:6px 12px 4px;font-size:12px;color:#ccc}
 .stat-row{display:flex;align-items:center;justify-content:space-around;margin-bottom:2px}
 .stat-bar .item{text-align:center;line-height:1.3;min-width:0}
-.stat-bar .val{font-size:15px;font-weight:700;color:#fff;white-space:nowrap}
-.stat-bar .val.sm{font-size:12px;font-weight:500;color:#ccc}
-.stat-bar .lbl{font-size:9px;color:#666;letter-spacing:.3px;white-space:nowrap}
-.stat-bar .sep{width:1px;height:22px;background:rgba(255,255,255,.08);flex-shrink:0}
-.stat-bar .sep.h{width:100%;height:1px;background:rgba(255,255,255,.06);margin:2px 0}
+.stat-bar .val{font-size:14px;font-weight:700;color:#fff;white-space:nowrap}
+.stat-bar .val.sm{font-size:11px;font-weight:500;color:#ccc}
+.stat-bar .lbl{font-size:8px;color:#666;letter-spacing:.3px;white-space:nowrap}
+.stat-bar .sep{width:1px;height:18px;background:rgba(255,255,255,.08);flex-shrink:0}
+.chart-area{padding:2px 12px 6px;height:80px;position:relative}
+.chart-area canvas{width:100%!important;height:70px!important}
+
+/* Leaflet缩放按钮避让 */
+.leaflet-control-zoom{transition:left .3s ease}
+.leaflet-control-zoom.shifted{left:250px!important}
 
 /* 移动端适配 */
 @media(max-width:600px){
   .side{width:190px}
   .side.off{transform:translateX(-190px)}
   .toolbar.shifted{left:200px}
+  .leaflet-control-zoom.shifted{left:200px!important}
   .info{width:calc(100vw - 20px);right:10px;left:10px;top:auto;bottom:66px;
     max-height:40vh;font-size:12px}
-  .stat-bar{padding:4px 6px 6px}
-  .stat-bar .val{font-size:13px}
-  .stat-bar .val.sm{font-size:11px}
-  .stat-bar .lbl{font-size:8px}
+  .stat-bar .val{font-size:12px}
+  .stat-bar .val.sm{font-size:10px}
+  .chart-area{height:60px}
+  .chart-area canvas{height:50px!important}
   .file-box select{max-width:130px}
 }
 </style>
@@ -323,13 +329,13 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 <div id="map"></div>
 
 <!-- 左侧圈数栏 -->
-<div class="side" id="sb" style="display:none">
+<div class="side off" id="sb">
   <div class="hd"><span id="sbT">圈数</span><button class="close" onclick="tSb()">&times;</button></div>
   <div class="lst" id="ll"></div>
 </div>
 
 <!-- 顶部工具栏 -->
-<div class="toolbar" id="tbWrap">
+<div class="toolbar shifted" id="tbWrap">
   <button class="tb" id="bL" onclick="tSb()" style="display:none">圈数</button>
   <button class="tb" id="bM" onclick="cycleMap()">卫星</button>
   <button class="tb" id="bC" onclick="cMod()">心率</button>
@@ -341,10 +347,14 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 <!-- 点击信息面板 -->
 <div class="info" id="pnl" style="display:none"></div>
 
-<!-- 底部固定统计栏 -->
-<div class="stat-bar" id="statBar"></div>
+<!-- 底部固定区域 -->
+<div class="bottom-area">
+  <div class="stat-bar" id="statBar"></div>
+  <div class="chart-area"><canvas id="chart"></canvas></div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 var ALL=@DATA@, FNAMES=@FILENAMES@;
 var ci=0,P,S,LP,LPP,KM,KMPT,CLR,HAS;
@@ -376,7 +386,11 @@ function initMap(){
   mapLayers[3].layer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
     {attribution:'© Esri',maxZoom:19,opacity:0.7});
 
-  mapLayers[0].layer.addTo(mp);
+  // 默认卫星图
+  mapLayers[1].layer.addTo(mp);
+  document.getElementById('bM').textContent='卫星';
+  document.getElementById('bM').classList.add('on');
+  curMapIdx=1;
   mp.setView([0,0],13);
   // 点击地图空白处关闭信息面板
   mp.on('click',function(){document.getElementById('pnl').style.display='none'});
@@ -414,9 +428,6 @@ function loadFile(i){
     useKm=false;
     bL.textContent='圈数';
   }
-  // 关闭侧边栏
-  document.getElementById('sb').classList.add('off');
-  document.getElementById('tbWrap').classList.remove('shifted');
   if(!mp)initMap();
   buildSb();draw();addCts();buildStat();
   document.getElementById('fSel').value=i;
@@ -495,56 +506,76 @@ function buildStat(){
   var d=(S.dist/1000).toFixed(2);
   var apSec=S.avg_spd>0?Math.floor(1000/S.avg_spd):0;
   var ap=apSec>0?(apSec>1200?'慢':Math.floor(apSec/60)+"'"+String(apSec%60).padStart(2,'0')+'"'):'--\'--"';
-  var mpSec=S.max_spd>0?Math.floor(1000/S.max_spd):0;
-  var mp=mpSec>0?(mpSec>1200?'慢':Math.floor(mpSec/60)+"'"+String(mpSec%60).padStart(2,'0')+'"'):'--\'--"';
+  var bpSec=S.max_spd>0?Math.floor(1000/S.max_spd):0;
+  var bp=bpSec>0?(bpSec>1200?'慢':Math.floor(bpSec/60)+"'"+String(bpSec%60).padStart(2,'0')+'"'):'--\'--"';
   var t=S.time;
   var tStr=t>=3600?(~~(t/3600)+':'+String(~~((t%3600)/60)).padStart(2,'0')+':'+String(~~(t%60)).padStart(2,'0'))
     :(~~(t/60)+':'+String(~~(t%60)).padStart(2,'0'));
-  var asc=S.asc||'--', desc=S.desc||'--';
-  var cal=S.cal||'--';
-  var lapStr=HAS?LP.length:'--';
-  var avgCad='--';
-  if(P.length){
-    var cadSum=0,cadN=0;
-    for(var i=0;i<P.length;i++){if(P[i].cad){cadSum+=P[i].cad;cadN++}}
-    if(cadN>0) avgCad=Math.round(cadSum/cadN);
+  // 计算扩展统计
+  var altVals=[],cadVals=[],hrVals=[];
+  for(var i=0;i<P.length;i++){
+    if(P[i].alt!=null) altVals.push(P[i].alt);
+    if(P[i].cad) cadVals.push(P[i].cad);
+    if(P[i].hr) hrVals.push(P[i].hr);
   }
+  var minAlt=altVals.length?Math.min.apply(null,altVals).toFixed(0):'--';
+  var maxAlt=altVals.length?Math.max.apply(null,altVals).toFixed(0):'--';
+  var avgCad=cadVals.length?Math.round(cadVals.reduce(function(a,b){return a+b},0)/cadVals.length):'--';
+  var maxCad=cadVals.length?Math.max.apply(null,cadVals):'--';
+  var minHr=hrVals.length?Math.min.apply(null,hrVals):'--';
+  var steps=0,avgStep=0;
+  if(cadVals.length&&d>0){
+    // 估算步数: cad(rpm) * time(min) * 2
+    steps=Math.round(cadVals.reduce(function(a,b){return a+b},0)/cadVals.length*(t/60)*2);
+    avgStep=steps>0?Math.round(d*100000/steps):0; // cm
+  }
+  var asc=S.asc||'--',desc=S.desc||'--',cal=S.cal||'--';
   document.getElementById('statBar').innerHTML=
-    // 第一行：核心数据
+    // 第一行
     '<div class="stat-row">'+
-    '<div class="item"><div class="val">'+d+'</div><div class="lbl">公里</div></div>'+
+    '<div class="item"><div class="val">'+d+'</div><div class="lbl">距离</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+tStr+'</div><div class="lbl">时长</div></div>'+
+    '<div class="item"><div class="val">'+tStr+'</div><div class="lbl">用时</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+ap+'</div><div class="lbl">配速/km</div></div>'+
+    '<div class="item"><div class="val">'+ap+'</div><div class="lbl">平均配速</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+mp+'</div><div class="lbl">最快配速</div></div>'+
+    '<div class="item"><div class="val">'+bp+'</div><div class="lbl">最佳配速</div></div>'+
     '<div class="sep"></div>'+
     '<div class="item"><div class="val">'+(S.avg_hr||'--')+'</div><div class="lbl">平均心率</div></div>'+
     '<div class="sep"></div>'+
     '<div class="item"><div class="val">'+(S.max_hr||'--')+'</div><div class="lbl">最高心率</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val">'+minHr+'</div><div class="lbl">最低心率</div></div>'+
     '</div>'+
-    // 第二行：辅助数据
+    // 第二行
     '<div class="stat-row">'+
-    '<div class="item"><div class="val sm">'+cal+'</div><div class="lbl">千卡</div></div>'+
+    '<div class="item"><div class="val sm">'+avgCad+'</div><div class="lbl">平均步频</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val sm">'+lapStr+'</div><div class="lbl">圈数</div></div>'+
+    '<div class="item"><div class="val sm">'+maxCad+'</div><div class="lbl">最高步频</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val sm">'+asc+'m</div><div class="lbl">爬升</div></div>'+
+    '<div class="item"><div class="val sm">'+avgStep+'</div><div class="lbl">平均步幅cm</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val sm">'+desc+'m</div><div class="lbl">下降</div></div>'+
+    '<div class="item"><div class="val sm">'+(steps||'--')+'</div><div class="lbl">步数</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val sm">'+avgCad+'</div><div class="lbl">踏频</div></div>'+
+    '<div class="item"><div class="val sm">'+maxAlt+'m</div><div class="lbl">最高海拔</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val sm">'+S.sport+'</div><div class="lbl">类型</div></div>'+
+    '<div class="item"><div class="val sm">'+minAlt+'m</div><div class="lbl">最低海拔</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val sm">'+asc+'m</div><div class="lbl">累计上升</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val sm">'+desc+'m</div><div class="lbl">累计下降</div></div>'+
+    '<div class="sep"></div>'+
+    '<div class="item"><div class="val sm">'+cal+'</div><div class="lbl">消耗kcal</div></div>'+
     '</div>';
+  // 绘制图表
+  drawChart();
 }
 
 // ===== 圈数/公里栏 =====
 function buildSb(){
   var btn=document.getElementById('bL'),sb=document.getElementById('sb');
   if(btn.classList.contains('disabled')){sb.style.display='none';return}
-  sb.style.display='';sb.classList.remove('off');
+  sb.style.display='';
 
   var data, label, allLabel;
   if(useKm){
@@ -588,9 +619,11 @@ function tSb(){
   if(isOpen){
     sb.classList.add('off');
     document.getElementById('tbWrap').classList.remove('shifted');
+    document.querySelector('.leaflet-control-zoom').classList.remove('shifted');
   } else {
     sb.classList.remove('off');
     document.getElementById('tbWrap').classList.add('shifted');
+    document.querySelector('.leaflet-control-zoom').classList.add('shifted');
   }
 }
 
@@ -602,12 +635,54 @@ function cMod(){
   if(al===-1){draw();addCts()}
 }
 
+// ===== 图表 =====
+var chartObj=null;
+function drawChart(){
+  if(chartObj){chartObj.destroy();chartObj=null}
+  var cv=document.getElementById('chart');
+  if(!cv||typeof Chart==='undefined')return;
+  // 采样: 最多200个点
+  var step=Math.max(1,Math.floor(P.length/200));
+  var labels=[],hrData=[],altData=[],paceData=[];
+  for(var i=0;i<P.length;i+=step){
+    labels.push(i);
+    hrData.push(P[i].hr||null);
+    altData.push(P[i].alt||null);
+    paceData.push(P[i].spd>0?Math.round(1000/P[i].spd/60):null); // min/km
+  }
+  chartObj=new Chart(cv,{
+    type:'line',
+    data:{
+      labels:labels,
+      datasets:[
+        {label:'配速',data:paceData,borderColor:'#ff6b6b',borderWidth:1.5,
+         pointRadius:0,tension:.3,yAxisID:'y',spanGaps:true},
+        {label:'心率',data:hrData,borderColor:'#ffd93d',borderWidth:1.5,
+         pointRadius:0,tension:.3,yAxisID:'y1',spanGaps:true},
+        {label:'海拔',data:altData,borderColor:'#6bcb77',borderWidth:1.5,
+         pointRadius:0,tension:.3,yAxisID:'y2',spanGaps:true}
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:true,labels:{color:'#aaa',font:{size:10},
+        boxWidth:12,padding:6},position:'top'}},
+      interaction:{intersect:false,mode:'index'},
+      scales:{
+        x:{display:false},
+        y:{display:false,reverse:true,min:0},
+        y1:{display:false,reverse:true,min:40},
+        y2:{display:false}
+      }
+    }
+  });
+}
+
 // ===== 文件切换 =====
 function swFile(i){loadFile(i)}
 
 // ===== 初始化 =====
 (function(){
-  // 填充文件选择器
   var sel=document.getElementById('fSel');
   for(var i=0;i<FNAMES.length;i++){
     var opt=document.createElement('option');
@@ -674,6 +749,25 @@ def open_browser(path):
         subprocess.Popen([sys.executable, "-m", "http.server", "8765", "-d", dirpath])
         webbrowser.open(f"http://localhost:8765/{fname}")
 
+def open_window(path):
+    """用独立窗口打开HTML。优先pywebview，回退浏览器。"""
+    try:
+        import webview
+        webview.create_window(
+            "FIT 运动轨迹查看器", path,
+            width=1200, height=800,
+            min_size=(800, 500)
+        )
+        webview.start()
+        return True
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    # pywebview 不可用，回退浏览器
+    open_browser(path)
+    return False
+
 def main():
     fit_paths = []
     for arg in sys.argv[1:]:
@@ -699,7 +793,7 @@ def main():
         print("Error: No valid FIT files!"); sys.exit(1)
     gen_html(all_data, out)
     print(f"\nGenerated: {out} ({len(all_data)} files)")
-    open_browser(out)
+    open_window(out)
 
 if __name__ == "__main__":
     main()
