@@ -83,6 +83,11 @@ def parse_fit(path):
     }
     has_laps, lap_data = detect_loops(points)
     summary["laps"] = len(lap_data) if has_laps else 0
+
+    # 公里分段（始终计算，非绕圈时使用）
+    km_data = detect_km_splits(points)
+    summary["km_splits"] = len(km_data)
+    summary["km_splits_data"] = km_data
     for p in points: del p["ts"]
     return points, summary, lap_data, has_laps
 
@@ -153,6 +158,43 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
         laps.append(_make_lap(points, len(lap_ends), prev, len(points)-1, closed=False))
     return True, laps
 
+def detect_km_splits(points):
+    """检测每公里分段（用GPS距离）。"""
+    if not points: return []
+    splits = []
+    km_idx = 1
+    start = 0
+    cum_dist = 0.0
+    for i in range(1, len(points)):
+        seg_d = haversine(points[i-1]["lat"], points[i-1]["lon"],
+                          points[i]["lat"], points[i]["lon"])
+        cum_dist += seg_d
+        if cum_dist >= km_idx * 1000:
+            splits.append(_make_km_split(points, km_idx, start, i))
+            km_idx += 1
+            start = i
+    if start < len(points) - 1:
+        splits.append(_make_km_split(points, km_idx, start, len(points) - 1))
+    return splits
+
+def _make_km_split(points, idx, si, ei):
+    lp = points[si:ei+1]
+    ld = sum(haversine(lp[j-1]["lat"],lp[j-1]["lon"],lp[j]["lat"],lp[j]["lon"])
+             for j in range(1, len(lp)))
+    t0, t1 = lp[0].get("ts"), lp[-1].get("ts")
+    el = (t1 - t0).total_seconds() if isinstance(t0, datetime) and isinstance(t1, datetime) else 0
+    hrs = [p["hr"] for p in lp if p.get("hr")]
+    ahr = int(sum(hrs)/len(hrs)) if hrs else None
+    asp = round(ld / el, 2) if el > 0 else None
+    out_pts = [dict(p) for p in lp]
+    for p in out_pts: p.pop("ts", None)
+    return {
+        "i": idx, "si": si, "ei": ei,
+        "d": round(ld, 1), "t": round(el),
+        "hr": ahr, "spd": asp, "pace": speed_to_pace(asp),
+        "n": len(lp), "closed": True, "pts": out_pts,
+    }
+
 def _make_lap(points, idx, si, ei, closed):
     lp = points[si:ei+1]
     ld = sum(haversine(lp[j-1]["lat"],lp[j-1]["lon"],lp[j]["lat"],lp[j]["lon"])
@@ -218,7 +260,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 /* 顶部工具栏 */
 .toolbar{position:fixed;top:10px;left:10px;z-index:200;
   display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.toolbar.shifted{left:240px}
+.toolbar.shifted{left:250px}
 .tb{background:rgba(15,15,30,.85);backdrop-filter:blur(8px);border:none;
   border-radius:8px;padding:7px 12px;color:#eee;font-size:12px;
   cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);
@@ -305,8 +347,9 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 var ALL=@DATA@, FNAMES=@FILENAMES@;
-var ci=0,P,S,LP,LPP,CLR,HAS;
+var ci=0,P,S,LP,LPP,KM,KMPT,CLR,HAS;
 var mp=null,cm='hr',al=-1,segs=[],cts=[];
+var useKm=false; // 无圈数时使用公里分段
 
 // ===== 地图图层 =====
 var mapLayers=[
@@ -356,16 +399,24 @@ function cycleMap(){
 
 function loadFile(i){
   ci=i;var d=ALL[i];
-  P=d.pts;S=d.sm;LP=d.laps;LPP=d.lap_pts;CLR=d.clr;HAS=d.has;
-  al=-1;
+  P=d.pts;S=d.sm;LP=d.laps;LPP=d.lap_pts;KM=d.km;KMPT=d.km_pts;CLR=d.clr;HAS=d.has;
+  al=-1;useKm=false;
   document.getElementById('pnl').style.display='none';
-  // 圈数按钮：无圈数时变灰不可按
+  // 按钮：有圈数显示"圈数"，无圈数显示"公里"
   var bL=document.getElementById('bL');
+  bL.style.display='';
+  bL.classList.remove('disabled');
   if(!HAS||!LP.length){
-    bL.classList.add('disabled');bL.style.display='';
+    useKm=true;
+    bL.textContent='公里';
+    if(!KM||!KM.length) bL.classList.add('disabled');
   } else {
-    bL.classList.remove('disabled');bL.style.display='';
+    useKm=false;
+    bL.textContent='圈数';
   }
+  // 关闭侧边栏
+  document.getElementById('sb').classList.add('off');
+  document.getElementById('tbWrap').classList.remove('shifted');
   if(!mp)initMap();
   buildSb();draw();addCts();buildStat();
   document.getElementById('fSel').value=i;
@@ -381,7 +432,9 @@ function pc(p){return cm==='spd'?sc(p.spd):cm==='alt'?ac(p.alt):hc(p.hr)}
 // ===== 绘制轨迹 =====
 function draw(){
   segs.forEach(function(s){mp.removeLayer(s)});segs=[];
-  var v=al>=0?LPP[al]:P;
+  var v;
+  if(al>=0){v=useKm?KMPT[al]:LPP[al]}
+  else{v=P}
   if(!v||!v.length)return;
   for(var i=0;i<v.length-1;i++){
     var c=HAS&&al>=0?CLR[al%CLR.length]:pc(v[i]);
@@ -403,7 +456,7 @@ function draw(){
 function addCts(){
   cts.forEach(function(m){mp.removeLayer(m)});cts=[];
   var v;
-  if(al>=0){v=LPP[al];if(!v)return}
+  if(al>=0){v=useKm?KMPT[al]:LPP[al];if(!v)return}
   else{v=P}
   v.forEach(function(p,i){
     var m=L.circleMarker([p.lat,p.lon],
@@ -422,9 +475,9 @@ function showP(p,idx){
   var pace=paceSec>0?(paceSec>1200?'慢':Math.floor(paceSec/60)+"'"+String(paceSec%60).padStart(2,'0')+'"'):'--\'--"';
   var ln=0;
   if(HAS)for(var j=0;j<LP.length;j++)if(idx>=LP[j].si&&idx<=LP[j].ei){ln=j+1;break}
-  var lapInfo=ln?(LP[ln-1].closed?'<span style="color:#00e676">闭合</span>':'<span style="color:#ff9100">未闭合</span>'):'';
+  var lapInfo=ln?(useKm?('第'+ln+'公里'):(LP[ln-1].closed?'<span style="color:#00e676">闭合</span>':'<span style="color:#ff9100">未闭合</span>')):'';
   pn.innerHTML=
-    '<h3>#'+(idx+1)+(ln?' 第'+ln+'圈 '+lapInfo:'')+'</h3>'+
+    '<h3>#'+(idx+1)+(ln?' '+lapInfo+' ':'')+'</h3>'+
     '<div class="r"><span class="l">时间</span><span class="v">'+(p.time||'--')+'</span></div>'+
     '<div class="sp"></div>'+
     '<div class="r"><span class="l">心率</span><span class="v">'+(p.hr||'--')+' bpm</span></div>'+
@@ -487,28 +540,37 @@ function buildStat(){
     '</div>';
 }
 
-// ===== 圈数栏 =====
+// ===== 圈数/公里栏 =====
 function buildSb(){
   var btn=document.getElementById('bL'),sb=document.getElementById('sb');
-  if(!HAS||!LP.length){btn.style.display='none';sb.style.display='none';return}
-  btn.style.display='';sb.style.display='';sb.classList.remove('off');
+  if(btn.classList.contains('disabled')){sb.style.display='none';return}
+  sb.style.display='';sb.classList.remove('off');
 
-  var closedCnt=LP.filter(function(l){return l.closed}).length;
+  var data, label, allLabel;
+  if(useKm){
+    data=KM; label='公里'; allLabel=S.sport+' · 公里分段';
+  } else {
+    data=LP; label='圈'; allLabel=S.sport+' · 圈数';
+  }
+  if(!data||!data.length){sb.style.display='none';return}
+
+  var closedCnt=data.filter(function(l){return l.closed}).length;
   var h='<div class="card on" onclick="sL(-1)" style="--c:#666">'+
-    '<div class="n">全部<span class="badge">'+LP.length+'圈 / '+closedCnt+'闭合</span></div>'+
+    '<div class="n">全部<span class="badge">'+data.length+label+(useKm?'':' / '+closedCnt+'闭合')+'</span></div>'+
     '<div class="s"><span>'+(S.dist/1000).toFixed(2)+'km</span></div></div>';
 
-  LP.forEach(function(l,i){
+  data.forEach(function(l,i){
     var c=CLR[i%CLR.length];
     var tStr=l.t>=60?(~~(l.t/60)+'分'+l.t%60+'秒'):(l.t+'秒');
-    var tag=l.closed?'':'<span class="badge" style="color:#ff9100">未闭合</span>';
+    var tag=(useKm||l.closed)?'':'<span class="badge" style="color:#ff9100">未闭合</span>';
+    var name=useKm?('第'+l.i+'公里'):('第'+l.i+'圈'+tag);
     h+='<div class="card" id="c'+i+'" onclick="sL('+i+')" style="--c:'+c+'">'+
-      '<div class="n"><span class="dot" style="background:'+c+'"></span>第'+l.i+'圈'+tag+'</div>'+
+      '<div class="n"><span class="dot" style="background:'+c+'"></span>'+name+'</div>'+
       '<div class="s"><span>'+l.d+'m</span><span>'+tStr+'</span><span>'+l.pace+'/km</span></div>'+
       '<div class="s"><span>心率 '+(l.hr||'--')+'</span></div></div>';
   });
   document.getElementById('ll').innerHTML=h;
-  document.getElementById('sbT').textContent=S.sport+' · 圈数';
+  document.getElementById('sbT').textContent=allLabel;
 }
 
 function sL(i){
@@ -521,8 +583,15 @@ function sL(i){
 function tSb(){
   var bL=document.getElementById('bL');
   if(bL.classList.contains('disabled'))return;
-  document.getElementById('sb').classList.toggle('off');
-  document.getElementById('tbWrap').classList.toggle('shifted');
+  var sb=document.getElementById('sb');
+  var isOpen=!sb.classList.contains('off');
+  if(isOpen){
+    sb.classList.add('off');
+    document.getElementById('tbWrap').classList.remove('shifted');
+  } else {
+    sb.classList.remove('off');
+    document.getElementById('tbWrap').classList.add('shifted');
+  }
 }
 
 // ===== 颜色模式 =====
@@ -560,10 +629,18 @@ def gen_html(all_file_data, out):
             cl = dict(l)
             cl.pop("pts", None)
             clean_laps.append(cl)
+        km_data = sm.get("km_splits_data", [])
+        clean_km = []
+        for l in km_data:
+            cl = dict(l)
+            cl.pop("pts", None)
+            clean_km.append(cl)
         datasets.append({
             "pts": pts, "sm": sm, "laps": clean_laps,
             "lap_pts": [l.get("pts", []) for l in laps],
-            "clr": LAP_COLORS[:len(laps)], "has": has
+            "km": clean_km,
+            "km_pts": [l.get("pts", []) for l in km_data],
+            "clr": LAP_COLORS[:max(len(laps), len(km_data))], "has": has
         })
         names.append(fn)
     html = HTML_TEMPLATE.replace("@DATA@", json.dumps(datasets, ensure_ascii=False), 1)
