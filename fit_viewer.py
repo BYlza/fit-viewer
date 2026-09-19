@@ -87,14 +87,27 @@ def parse_fit(path):
     return points, summary, lap_data, has_laps
 
 def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
-    """闭环检测。每圈末点 = 离该圈起点最近的点。"""
+    """闭环检测。每圈末点 = 离该圈起点最近的点。
+    严格条件：
+    1. 路由必须集中：距离标准差/最大距离 < 0.35（距离分布紧凑）
+    2. 必须真正远离起点再回来（最远 > 80m）
+    3. 回归点必须足够近（< 最远距离的25%）
+    """
     if len(points) < 30: return False, []
     rlat, rlon = points[0]["lat"], points[0]["lon"]
     all_dists = [haversine(rlat, rlon, p["lat"], p["lon"]) for p in points]
     max_d = max(all_dists)
-    if max_d < 30: return False, []
+    if max_d < 80: return False, []
+
+    # 离散度检查：绕圈路由的距离分布应该紧凑（std/max 小）
+    avg_d = sum(all_dists) / len(all_dists)
+    variance = sum((d - avg_d) ** 2 for d in all_dists) / len(all_dists)
+    std_d = variance ** 0.5
+    cv = std_d / max_d if max_d > 0 else 1
+    if cv > 0.35: return False, []  # 距离分布太分散，不是绕圈
 
     far_thr = max_d * 0.50
+    near_thr = max_d * 0.25
 
     lap_ends = []
     away_cnt = 0
@@ -104,7 +117,6 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
     min_idx = 0
 
     for idx in range(len(points)):
-        # 用当前圈起点计算距离
         lsp = points[prev_start]
         d = haversine(lsp["lat"], lsp["lon"], points[idx]["lat"], points[idx]["lon"])
 
@@ -119,7 +131,7 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
             if d < min_dist:
                 min_dist = d
                 min_idx = idx
-            if d > far_thr and (idx - prev_start) >= min_lap_pts:
+            if d < near_thr and (idx - prev_start) >= min_lap_pts:
                 lap_d = sum(
                     haversine(points[j-1]["lat"], points[j-1]["lon"],
                               points[j]["lat"], points[j]["lon"])
@@ -205,8 +217,7 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 
 /* 顶部工具栏 */
 .toolbar{position:fixed;top:10px;left:10px;z-index:200;
-  display:flex;gap:6px;align-items:center;flex-wrap:wrap;
-  transition:left .3s ease}
+  display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .toolbar.shifted{left:240px}
 .tb{background:rgba(15,15,30,.85);backdrop-filter:blur(8px);border:none;
   border-radius:8px;padding:7px 12px;color:#eee;font-size:12px;
