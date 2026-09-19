@@ -162,7 +162,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
-<title>FIT Route Viewer</title>
+<title>FIT 运动轨迹查看器</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -260,14 +260,14 @@ body{font-family:-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden;back
 
 <!-- 左侧圈数栏 -->
 <div class="side" id="sb" style="display:none">
-  <div class="hd"><span id="sbT">Laps</span><button class="close" onclick="tSb()">&times;</button></div>
+  <div class="hd"><span id="sbT">圈数</span><button class="close" onclick="tSb()">&times;</button></div>
   <div class="lst" id="ll"></div>
 </div>
 
 <!-- 顶部工具栏 -->
 <div class="toolbar" id="tbWrap">
-  <button class="tb" id="bL" onclick="tSb()" style="display:none">Laps</button>
-  <button class="tb" id="bC" onclick="cMod()">HR</button>
+  <button class="tb" id="bL" onclick="tSb()" style="display:none">圈数</button>
+  <button class="tb" id="bC" onclick="cMod()">心率</button>
 </div>
 
 <!-- 文件选择 -->
@@ -323,11 +323,11 @@ function draw(){
   mp.fitBounds(L.latLngBounds(v.map(function(p){return[p.lat,p.lon]})),{padding:[50,60]});
   segs.push(L.circleMarker([v[0].lat,v[0].lon],
     {radius:7,fillColor:'#00e676',fillOpacity:1,weight:2,color:'#fff'})
-    .addTo(mp).bindTooltip('Start',{direction:'top',offset:[0,-8]}));
+    .addTo(mp).bindTooltip('起点',{direction:'top',offset:[0,-8]}));
   if(HAS&&al>=0&&!LP[al].closed){
     segs.push(L.circleMarker([v[v.length-1].lat,v[v.length-1].lon],
       {radius:7,fillColor:'#ff1744',fillOpacity:1,weight:2,color:'#fff'})
-      .addTo(mp).bindTooltip('End (open)',{direction:'top',offset:[0,-8]}));
+      .addTo(mp).bindTooltip('终点(未闭合)',{direction:'top',offset:[0,-8]}));
   }
 }
 
@@ -353,18 +353,18 @@ function showP(p,idx){
   var pace=p.spd>0?(Math.floor(1000/p.spd)+"'"+String(~~(1000/p.spd)%60).padStart(2,'0')+'"'):'--\'--"';
   var ln=0;
   if(HAS)for(var j=0;j<LP.length;j++)if(idx>=LP[j].si&&idx<=LP[j].ei){ln=j+1;break}
-  var lapInfo=ln?(LP[ln-1].closed?'<span style="color:#00e676">closed</span>':'<span style="color:#ff9100">open</span>'):'';
+  var lapInfo=ln?(LP[ln-1].closed?'<span style="color:#00e676">闭合</span>':'<span style="color:#ff9100">未闭合</span>'):'';
   pn.innerHTML=
-    '<h3>#'+(idx+1)+(ln?' Lap'+ln+' '+lapInfo:'')+'</h3>'+
-    '<div class="r"><span class="l">Time</span><span class="v">'+(p.time||'--')+'</span></div>'+
+    '<h3>#'+(idx+1)+(ln?' 第'+ln+'圈 '+lapInfo:'')+'</h3>'+
+    '<div class="r"><span class="l">时间</span><span class="v">'+(p.time||'--')+'</span></div>'+
     '<div class="sp"></div>'+
-    '<div class="r"><span class="l">HR</span><span class="v">'+(p.hr||'--')+' bpm</span></div>'+
-    '<div class="r"><span class="l">Speed</span><span class="v">'+(p.spd*3.6).toFixed(1)+' km/h</span></div>'+
-    '<div class="r"><span class="l">Pace</span><span class="v">'+pace+'/km</span></div>'+
-    '<div class="r"><span class="l">Alt</span><span class="v">'+p.alt+' m</span></div>'+
+    '<div class="r"><span class="l">心率</span><span class="v">'+(p.hr||'--')+' bpm</span></div>'+
+    '<div class="r"><span class="l">速度</span><span class="v">'+(p.spd*3.6).toFixed(1)+' km/h</span></div>'+
+    '<div class="r"><span class="l">配速</span><span class="v">'+pace+'/km</span></div>'+
+    '<div class="r"><span class="l">海拔</span><span class="v">'+p.alt+' m</span></div>'+
     '<div class="sp"></div>'+
-    '<div class="r"><span class="l">Dist</span><span class="v">'+(p.dst/1000).toFixed(2)+' km</span></div>'+
-    '<div class="r"><span class="l">Cadence</span><span class="v">'+(p.cad||'--')+' spm</span></div>';
+    '<div class="r"><span class="l">距离</span><span class="v">'+(p.dst/1000).toFixed(2)+' km</span></div>'+
+    '<div class="r"><span class="l">踏频</span><span class="v">'+(p.cad||'--')+' spm</span></div>';
   pn.style.display='block';
 }
 
@@ -377,17 +377,17 @@ function buildStat(){
     :(~~(t/60)+':'+String(~~(t%60)).padStart(2,'0'));
   var lapStr=HAS?LP.length:'--';
   document.getElementById('statBar').innerHTML=
-    '<div class="item"><div class="val">'+d+'</div><div class="lbl">km</div></div>'+
+    '<div class="item"><div class="val">'+d+'</div><div class="lbl">公里</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+tStr+'</div><div class="lbl">Time</div></div>'+
+    '<div class="item"><div class="val">'+tStr+'</div><div class="lbl">时长</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+ap+'</div><div class="lbl">Pace/km</div></div>'+
+    '<div class="item"><div class="val">'+ap+'</div><div class="lbl">配速/km</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+(S.avg_hr||'--')+'</div><div class="lbl">Avg HR</div></div>'+
+    '<div class="item"><div class="val">'+(S.avg_hr||'--')+'</div><div class="lbl">平均心率</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+(S.cal||'--')+'</div><div class="lbl">kcal</div></div>'+
+    '<div class="item"><div class="val">'+(S.cal||'--')+'</div><div class="lbl">千卡</div></div>'+
     '<div class="sep"></div>'+
-    '<div class="item"><div class="val">'+lapStr+'</div><div class="lbl">Laps</div></div>';
+    '<div class="item"><div class="val">'+lapStr+'</div><div class="lbl">圈数</div></div>';
 }
 
 // ===== 圈数栏 =====
@@ -398,20 +398,20 @@ function buildSb(){
 
   var closedCnt=LP.filter(function(l){return l.closed}).length;
   var h='<div class="card on" onclick="sL(-1)" style="--c:#666">'+
-    '<div class="n">All<span class="badge">'+LP.length+' laps / '+closedCnt+' closed</span></div>'+
-    '<div class="s"><span>'+(S.dist/1000).toFixed(2)+' km</span></div></div>';
+    '<div class="n">全部<span class="badge">'+LP.length+'圈 / '+closedCnt+'闭合</span></div>'+
+    '<div class="s"><span>'+(S.dist/1000).toFixed(2)+'km</span></div></div>';
 
   LP.forEach(function(l,i){
     var c=CLR[i%CLR.length];
-    var tStr=l.t>=60?(~~(l.t/60)+'m'+l.t%60+'s'):(l.t+'s');
-    var tag=l.closed?'':'<span class="badge" style="color:#ff9100">open</span>';
+    var tStr=l.t>=60?(~~(l.t/60)+'分'+l.t%60+'秒'):(l.t+'秒');
+    var tag=l.closed?'':'<span class="badge" style="color:#ff9100">未闭合</span>';
     h+='<div class="card" id="c'+i+'" onclick="sL('+i+')" style="--c:'+c+'">'+
-      '<div class="n"><span class="dot" style="background:'+c+'"></span>Lap '+l.i+tag+'</div>'+
+      '<div class="n"><span class="dot" style="background:'+c+'"></span>第'+l.i+'圈'+tag+'</div>'+
       '<div class="s"><span>'+l.d+'m</span><span>'+tStr+'</span><span>'+l.pace+'/km</span></div>'+
-      '<div class="s"><span>HR '+(l.hr||'--')+'</span></div></div>';
+      '<div class="s"><span>心率 '+(l.hr||'--')+'</span></div></div>';
   });
   document.getElementById('ll').innerHTML=h;
-  document.getElementById('sbT').textContent=S.sport+' - Laps';
+  document.getElementById('sbT').textContent=S.sport+' · 圈数';
 }
 
 function sL(i){
@@ -429,7 +429,7 @@ function tSb(){
 // ===== 颜色模式 =====
 function cMod(){
   cm=['hr','spd','alt'][(['hr','spd','alt'].indexOf(cm)+1)%3];
-  document.getElementById('bC').textContent={hr:'HR',spd:'Speed',alt:'Alt'}[cm];
+  document.getElementById('bC').textContent={hr:'心率',spd:'速度',alt:'海拔'}[cm];
   document.getElementById('bC').classList.toggle('on',cm!=='hr');
   if(al===-1){draw();addCts()}
 }
@@ -472,7 +472,7 @@ def pick_files():
         root.withdraw()
         root.attributes("-topmost", True)
         paths = filedialog.askopenfilenames(
-            title="Select FIT files (multi-select)",
+            title="选择 FIT 文件(可多选)",
             filetypes=[("FIT 文件", "*.fit *.FIT"), ("所有文件", "*.*")])
         root.destroy()
         if paths: return list(paths)
