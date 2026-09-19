@@ -156,6 +156,18 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
         prev = end
     if prev < len(points) - 5:
         laps.append(_make_lap(points, len(lap_ends), prev, len(points)-1, closed=False))
+
+    # 圈距一致性检查：排除GPS噪声导致的误检
+    closed_dists = [l["d"] for l in laps if l["closed"] and l["d"] > 0]
+    if len(closed_dists) >= 2:
+        avg_d = sum(closed_dists) / len(closed_dists)
+        variance = sum((d - avg_d) ** 2 for d in closed_dists) / len(closed_dists)
+        cv = (variance ** 0.5) / avg_d if avg_d > 0 else 1
+        min_d = min(closed_dists)
+        # CV过大 或 有圈距离不到平均的一半 → 判定为非绕圈
+        if cv > 0.40 or min_d < avg_d * 0.50:
+            return False, []
+
     return True, laps
 
 def detect_km_splits(points):
