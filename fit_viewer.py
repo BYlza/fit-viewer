@@ -32,8 +32,13 @@ def speed_to_pace(v):
     return f"{s//60}'{s%60:02d}\""
 
 def sport_name(v):
-    return {0:"通用",1:"跑步",2:"骑行",5:"游泳",11:"步行",
-            16:"登山",17:"徒步",15:"划船"}.get(v, f"运动({v})")
+    S={0:"通用",1:"跑步",2:"骑行",5:"游泳",11:"步行",
+       16:"登山",17:"徒步",15:"划船",
+       "running":"跑步","cycling":"骑行","swimming":"游泳",
+       "walking":"步行","generic":"通用","mountaineering":"登山"}
+    if v in S: return S[v]
+    if isinstance(v,int): return S.get(v,"运动")
+    return S.get(str(v).lower(), str(v) if v else "运动")
 
 def parse_fit(path):
     fit = fitparse.FitFile(path)
@@ -318,6 +323,8 @@ function initMap(){
 
   mapLayers[0].layer.addTo(mp);
   mp.setView([0,0],13);
+  // 点击地图空白处关闭信息面板
+  mp.on('click',function(){document.getElementById('pnl').style.display='none'});
 }
 
 function cycleMap(){
@@ -362,7 +369,7 @@ function draw(){
     segs.push(L.polyline([[v[i].lat,v[i].lon],[v[i+1].lat,v[i+1].lon]],
       {color:c,weight:4,opacity:.85}).addTo(mp));
   }
-  mp.fitBounds(L.latLngBounds(v.map(function(p){return[p.lat,p.lon]})),{padding:[50,60]});
+  mp.fitBounds(L.latLngBounds(v.map(function(p){return[p.lat,p.lon]})),{padding:[50,60,80,60]});
   segs.push(L.circleMarker([v[0].lat,v[0].lon],
     {radius:7,fillColor:'#00e676',fillOpacity:1,weight:2,color:'#fff'})
     .addTo(mp).bindTooltip('起点',{direction:'top',offset:[0,-8]}));
@@ -509,7 +516,16 @@ function cMod(){
 function swFile(i){loadFile(i)}
 
 // ===== 初始化 =====
-initMap();loadFile(0);
+(function(){
+  // 填充文件选择器
+  var sel=document.getElementById('fSel');
+  for(var i=0;i<FNAMES.length;i++){
+    var opt=document.createElement('option');
+    opt.value=i;opt.textContent=FNAMES[i];
+    sel.appendChild(opt);
+  }
+  initMap();loadFile(0);
+})();
 </script>
 </body>
 </html>"""
