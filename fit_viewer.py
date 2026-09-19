@@ -91,34 +91,23 @@ def parse_fit(path):
     for p in points: del p["ts"]
     return points, summary, lap_data, has_laps
 
-def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
-    """闭环检测。每圈末点 = 离该圈起点最近的点。
-    严格条件：
-    1. 路由必须集中：距离标准差/最大距离 < 0.35（距离分布紧凑）
-    2. 必须真正远离起点再回来（最远 > 80m）
-    3. 回归点必须足够近（< 最远距离的25%）
+def detect_loops(points):
+    """闭环检测：纯GPS模式。
+    找所有经过起点区域的时段，每次经过=一圈。
+    跳过起始位置（活动开始时就在起点附近）。
+    最后一圈检查终点是否真正回到起点。
     """
     if len(points) < 30: return False, []
     rlat, rlon = points[0]["lat"], points[0]["lon"]
     all_dists = [haversine(rlat, rlon, p["lat"], p["lon"]) for p in points]
     max_d = max(all_dists)
-    if max_d < 80: return False, []
+    if max_d < 30: return False, []  # 路由太小
 
-    # 离散度检查：绕圈路由的距离分布应该紧凑（std/max 小）
-    avg_d = sum(all_dists) / len(all_dists)
-    variance = sum((d - avg_d) ** 2 for d in all_dists) / len(all_dists)
-    std_d = variance ** 0.5
-    cv = std_d / max_d if max_d > 0 else 1
-    if cv > 0.35: return False, []  # 距离分布太分散，不是绕圈
+    # 阈值：基于路由大小自适应
+    near_thr = max_d * 0.30
 
-    far_thr = max_d * 0.50
-    near_thr = max_d * 0.25
-    # 预计算全局距离
-    all_dists = [haversine(rlat, rlon, p["lat"], p["lon"]) for p in points]
-
-    # 方法：找所有"经过起点"的区间，每个区间=一圈
-    # 连续的近区点合并为一次"经过"
-    visits = []  # [(start_idx, end_idx, min_dist, min_dist_idx)]
+    # 找所有"经过起点"的连续区间
+    visits = []
     in_near = False
     v_start = 0
     v_min_d = 1e9
@@ -142,18 +131,22 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
     if in_near:
         visits.append((v_start, len(points) - 1, v_min_d, v_min_i))
 
-    # 每次经过起点 = 一圈。跳过起始位置（活动开始时就在起点附近）
+    # 至少3次经过（起始+2圈以上）
+    if len(visits) < 3: return False, []
+
+    # 每次经过 = 一圈。跳过起始位置
     lap_ends = []
     for vs, ve, md, mi in visits:
         if vs == 0:
-            continue  # 跳过起点处的第一次经过
+            continue
         lap_ends.append(mi)
 
     if len(lap_ends) < 2: return False, []
+
+    # 构建圈数据，所有点取自原始FIT数据
     laps = []
     prev = 0
     for lap_idx, end in enumerate(lap_ends):
-        # 最后一圈：检查终点是否真正回到起点附近
         is_closed = True
         if lap_idx == len(lap_ends) - 1:
             end_d = all_dists[end] if end < len(all_dists) else 0
@@ -163,35 +156,6 @@ def detect_loops(points, min_away=8, min_lap_pts=200, min_lap_dist=300):
         prev = end
     if prev < len(points) - 5:
         laps.append(_make_lap(points, len(lap_ends), prev, len(points)-1, closed=False))
-
-    # 圈距一致性验证：确保每圈距离合理
-    closed_dists = [l["d"] for l in laps if l["closed"] and l["d"] > 0]
-    if len(closed_dists) < 2:
-        return False, []
-
-    avg_d = sum(closed_dists) / len(closed_dists)
-
-    # 检测交替模式：圈距一大一小交替说明被错误拆分
-    # 例如 [400, 780, 400, 780] 应合并为 [1180, 1180]
-    if len(closed_dists) >= 4:
-        alt_count = 0
-        for i in range(1, len(closed_dists)):
-            if abs(closed_dists[i] - closed_dists[i-1]) > avg_d * 0.30:
-                alt_count += 1
-        # 超过一半的相邻圈有显著差异 → 交替模式
-        if alt_count > len(closed_dists) * 0.50:
-            return False, []
-
-    # 每圈必须在均值±35%内
-    consistent = [d for d in closed_dists if avg_d * 0.65 <= d <= avg_d * 1.35]
-    if len(consistent) < max(2, len(closed_dists) * 0.60):
-        return False, []
-    if len(consistent) >= 2:
-        c_avg = sum(consistent) / len(consistent)
-        c_var = sum((d - c_avg) ** 2 for d in consistent) / len(consistent)
-        c_cv = (c_var ** 0.5) / c_avg if c_avg > 0 else 1
-        if c_cv > 0.30:
-            return False, []
 
     return True, laps
 
